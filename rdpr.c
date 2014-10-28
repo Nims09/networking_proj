@@ -23,8 +23,8 @@ int main(int argc, char *argv[]) {
 	int sockfd;
 	int portno;
 	char *address;
-	struct sockaddr_in serv_addr, cli_addr;
-  socklen_t cli_len;
+	struct sockaddr_in recv_addr, sender_addr;
+  socklen_t sender_len;
   char buffer[MAXBUFLEN];   
 
 	// Confirm command line args
@@ -40,14 +40,14 @@ int main(int argc, char *argv[]) {
   	return -1;
   }
 
-  bzero((char *) &serv_addr, sizeof(serv_addr));
+  bzero((char *) &recv_addr, sizeof(recv_addr));
   portno = atoi(argv[2]);
   address = argv[1];
-  serv_addr.sin_family = AF_INET;
-  serv_addr.sin_addr.s_addr = inet_addr(address);
-  serv_addr.sin_port = htons(portno);
+  recv_addr.sin_family = AF_INET;
+  recv_addr.sin_addr.s_addr = inet_addr(address);
+  recv_addr.sin_port = htons(portno);
 
-  if ( bind(sockfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0)
+  if ( bind(sockfd, (struct sockaddr *) &recv_addr, sizeof(recv_addr)) < 0)
   {
   	close(sockfd);
   	fprintf(stderr, "REC:ERROR: error on bind()\n" );
@@ -59,15 +59,15 @@ int main(int argc, char *argv[]) {
 
   // Running loop
   while ( 1 ) {
-    cli_len = sizeof(cli_addr);
+    sender_len = sizeof(sender_addr);
 
     int numbytes;
     if ((numbytes = recvfrom(sockfd, buffer, MAXBUFLEN-1 , 0,
-        (struct sockaddr *)&cli_addr, &cli_len)) == -1) {
+        (struct sockaddr *)&sender_addr, &sender_len)) == -1) {
         perror("sws: error on recvfrom()!");
         return -1;
     }
-    
+
     printf("%s\n", buffer);
 
 

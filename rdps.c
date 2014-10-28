@@ -25,7 +25,7 @@ int main(int argc, char *argv[]) {
 	int dest_portno;
 	char *address;
 	char *dest_address;
-	struct sockaddr_in serv_addr, cli_addr;
+	struct sockaddr_in recv_addr, sender_addr;
   char buffer[MAXBUFLEN]; 
   socklen_t cli_len, serv_len;
 
@@ -42,38 +42,43 @@ int main(int argc, char *argv[]) {
   	return -1;
   }
 
-  bzero((char *) &serv_addr, sizeof(serv_addr));
+  bzero((char *) &recv_addr, sizeof(recv_addr));
   address = argv[1];
   dest_address = argv[3];
   portno = atoi(argv[2]);
   dest_portno = atoi(argv[4]);
-  serv_addr.sin_family = AF_INET;
-  serv_addr.sin_addr.s_addr = inet_addr(dest_address);
-  serv_addr.sin_port = htons(dest_portno);
 
-  // if ( bind(sockfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0)
-  // {
-  // 	close(sockfd);
-  // 	fprintf(stderr, "SEN: Error error on bind()\n" );
-  // 	return -1;
-  // }
+  recv_addr.sin_family = AF_INET;
+  recv_addr.sin_addr.s_addr = inet_addr(dest_address);
+  recv_addr.sin_port = htons(dest_portno);
+
+  sender_addr.sin_family = AF_INET;
+  sender_addr.sin_addr.s_addr = inet_addr(address);
+  sender_addr.sin_port = htons(portno);
+
+  if ( bind(sockfd, (struct sockaddr *) &sender_addr, sizeof(sender_addr)) < 0)
+  {
+  	close(sockfd);
+  	fprintf(stderr, "SEN: Error error on bind()\n" );
+  	return -1;
+  }
 
   // We are now connected and serving
   printf("rdps is running on RDP port %i.\n", portno);
 
   // Running loop
   while ( 1 ) {
-    cli_len = sizeof(cli_addr);
-    serv_len = sizeof(serv_addr);
+    cli_len = sizeof(sender_addr);
+    serv_len = sizeof(recv_addr);
 
-    if ((sendto(sockfd, ">test<", strlen(">test<"), 0, (struct sockaddr *)&serv_addr, serv_len)) == -1) {
+    if ((sendto(sockfd, ">test<", strlen(">test<"), 0, (struct sockaddr *)&recv_addr, serv_len)) == -1) {
         perror("SEN: Error sending string to socket.");
         return -1;
     }   
 
     int numbytes;
     if ((numbytes = recvfrom(sockfd, buffer, MAXBUFLEN-1 , 0,
-        (struct sockaddr *)&cli_addr, &cli_len)) == -1) {
+        (struct sockaddr *)&sender_addr, &cli_len)) == -1) {
         perror("SEN: Error on recvfrom()!");
         return -1;
     }
