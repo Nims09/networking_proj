@@ -27,13 +27,15 @@
 #define RST_TYPE 4
 
 // Builds a packet to be sent over the wire
-void buildRDPHeader(char *header, int type, int seqnum, int acknum, int payloadlength, int winsize);
+char* buildRDPHeader(int type, int seqnum, int acknum, int payloadlength, int winsize);
+
+void buildRDPPacket(char *previous_flag, int seqnum, int acknum, int payloadlength, int winsize, char *payload, int sockfd, struct sockaddr_in addr, socklen_t len);
 
 // Set portNo on an addr
 struct sockaddr_in setAddressAndPortNo(char *addr, int portno);
 
 // Send a string to the client
-int sendString(int sockfd, char *buffer, struct sockaddr_in addr, socklen_t len);
+int sendPacket(int sockfd, char *packet, struct sockaddr_in addr, socklen_t len);
 
 // Confirm the file exists
 int checkFilePath(char *loc);
@@ -75,6 +77,8 @@ int main(int argc, char *argv[]) {
   recv_addr = setAddressAndPortNo(dest_address, dest_portno);
   sender_addr = setAddressAndPortNo(address, portno);
 
+  // TODO: change this to use setsockopt with SO_REUSEADDR
+  // refrence: http://www.beej.us/guide/bgnet/output/html/multipage/setsockoptman.html
   if ( bind(sockfd, (struct sockaddr *) &sender_addr, sizeof(sender_addr)) < 0) {
     close(sockfd);
     fprintf(stderr, "SEN: Error error on bind()\n" );
@@ -83,7 +87,7 @@ int main(int argc, char *argv[]) {
 
   recv_len = sizeof(recv_addr);
   sender_len = sizeof(sender_addr);
-  
+
   // Read file into buffer
   if ( checkFilePath(file_path) < 0 ) {
     fprintf(stderr, "SEN: Error- no file found to send\n");
@@ -116,17 +120,17 @@ int main(int argc, char *argv[]) {
     fclose(fp);
   }
 
+  printf(">>>%s\n", buildRDPHeader(DAT_TYPE, 0, 0, 0, 0));
+
   // We are now connected and serving
   printf("rdps is running on RDP port %i.\n", portno);
 
-  char header[MAXBUFLEN];
-  buildRDPHeader(header, DAT_TYPE, 10, 11, 12, 13);
-  printf("%s\n", header);
+  // Initialize protocol
+  buildRDPPacket("init", 0, 0, 0, 0, payload, sockfd, recv_addr, recv_len);
 
   // Running loop
   while ( 1 ) {
-    sendString(sockfd, "test<<", recv_addr, recv_len);
-  
+
     int numbytes;
     if ((numbytes = recvfrom(sockfd, buffer, MAXBUFLEN-1 , 0,
         (struct sockaddr *)&recv_addr, &recv_len)) == -1) {
@@ -135,25 +139,37 @@ int main(int argc, char *argv[]) {
     }
 
   }
-
-  /*
-  Reciever initiates a file, thats where all its stored data is saved
-  Sender specifies a file to send to the reciever
-  */
-
-  /*
-  Sender intitiates by having the recievers IP the packets from then on containt where the IP:PoRTNO of the next packet will come from 
-  */
-
-  /*
-  Packets items and flags are seperated by a space 
-  */
+ 
   free(payload);
 	return -1;
 }
 
-void buildRDPHeader(char *header, int type, int seqnum, int acknum, int payloadlength, int winsize) {
+void buildRDPPacket(char *previous_flag, int seqnum, int acknum, int payloadlength, int winsize, char *payload, int sockfd, struct sockaddr_in addr, socklen_t len) {
+  int type = -1; 
+  char* packet = NULL;
+  printf("check init flag%d\n", (strcmp("init", previous_flag) != 0));
 
+  if ( strcmp("DAT", previous_flag) == 0 ) {
+
+  } else if ( strcmp("ACK", previous_flag) == 0 ) {
+
+  } else if ( strcmp("SYN", previous_flag) == 0 ) {
+    
+  } else if ( strcmp("FIN", previous_flag) == 0 ) {
+    
+  } else if ( strcmp("RST", previous_flag) == 0 ) {
+    
+  } else if ( strcmp("init", previous_flag) == 0 ) {
+    packet = buildRDPHeader(SYN_TYPE, 0, 0, 0, 0);
+  } else {
+
+  }
+  sendPacket(sockfd, packet, addr, len);
+}
+
+char* buildRDPHeader(int type, int seqnum, int acknum, int payloadlength, int winsize) {
+
+  static char header[MAXBUFLEN];
   char *typeString = NULL;
 
   switch ( type ) {
@@ -177,7 +193,10 @@ void buildRDPHeader(char *header, int type, int seqnum, int acknum, int payloadl
       break;
   }
 
-  sprintf(header, "UVicCSc361 %s %i %i %i %i\n\n", typeString, seqnum, acknum, payloadlength, winsize);
+  sprintf(header, "UVicCSc361 %s %i %i %i %i\n\n\0", typeString, seqnum, acknum, payloadlength, winsize);
+
+  char *finishedHeader = (char*) &header;
+  return finishedHeader;
 }
 
 struct sockaddr_in setAddressAndPortNo(char *addr, int portno) {
@@ -190,9 +209,9 @@ struct sockaddr_in setAddressAndPortNo(char *addr, int portno) {
   return to;
 }
 
-int sendString(int sockfd, char *buffer, struct sockaddr_in addr, socklen_t len) {
-    if ((sendto(sockfd, buffer, strlen(buffer), 0, (struct sockaddr *)&addr, len)) == -1) {
-        perror("Error sending string to socket.");
+int sendPacket(int sockfd, char *packet, struct sockaddr_in addr, socklen_t len) {
+    if ((sendto(sockfd, packet, strlen(packet), 0, (struct sockaddr *)&addr, len)) == -1) {
+        perror("Error sending packet to socket.");
         return -1;
     }   
     return 1;
@@ -201,3 +220,31 @@ int sendString(int sockfd, char *buffer, struct sockaddr_in addr, socklen_t len)
 int checkFilePath(char *loc) {
     return access(loc, F_OK);
 }
+
+ /*
+  Reciever initiates a file, thats where all its stored data is saved
+  Sender specifies a file to send to the reciever
+  */
+
+  /*
+  Sender intitiates by having the recievers IP the packets from then on containt where the IP:PoRTNO of the next packet will come from 
+  */
+
+  /*
+  Packets items and flags are seperated by a space 
+  */
+
+  /*
+  int size = strlen(payload);
+  int firstCount = 0;
+
+  while (firstCount < (size-9)) {
+    char str[10];
+    strncpy ( str, payload+firstCount, 9);
+    str[9] = '\0';
+    sendString(sockfd, str, recv_addr, recv_len);
+    firstCount = firstCount + 9;
+  }
+  printf("sz %d\n", size);
+  printf("cnt %d\n", firstCount);
+  */

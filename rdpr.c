@@ -20,6 +20,17 @@
 #define MAXPACKETSIZE 1024
 #define MAXBUFLEN 256
 
+#define DAT_TYPE 0
+#define ACK_TYPE 1
+#define SYN_TYPE 2
+#define FIN_TYPE 3
+#define RST_TYPE 4
+
+// Builds a packet to be sent over the wire
+char* buildRDPHeader(int type, int seqnum, int acknum, int payloadlength, int winsize);
+
+void buildRDPPacket(char *previous_flag, int seqnum, int acknum, int payloadlength, int winsize, char *payload, int sockfd, struct sockaddr_in addr, socklen_t len);
+
 // Set portNo on an addr
 struct sockaddr_in setAddressAndPortNo(char *addr, int portno);
 
@@ -104,33 +115,60 @@ int main(int argc, char *argv[]) {
 	return -1;
 }
 
-// void buildRDPHeader(char *header, int type, int seqnum, int acknum, int payloadlength, int winsize) {
+void buildRDPPacket(char *previous_flag, int seqnum, int acknum, int payloadlength, int winsize, char *payload, int sockfd, struct sockaddr_in addr, socklen_t len) {
+  int type = -1; 
+  char* packet = NULL;
+  printf("check init flag%d\n", (strcmp("init", previous_flag) != 0));
 
-//   char *typeString = NULL;
+  if ( strcmp("DAT", previous_flag) == 0 ) {
 
-//   switch ( type ) {
-//     case DAT_TYPE:
-//       typeString = "DAT";
-//       break;
-//     case ACK_TYPE:
-//       typeString = "ACK";
-//       break;
-//     case SYN_TYPE:
-//       typeString = "SYN";
-//       break;
-//     case FIN_TYPE:
-//       typeString = "FIN";
-//       break;
-//     case RST_TYPE:
-//       typeString = "RST";
-//       break;
-//     default:
-//       typeString = "RST";
-//       break;
-//   }
+  } else if ( strcmp("ACK", previous_flag) == 0 ) {
 
-//   fprintf(header, "UVicCSc361 %s %i %i %i %i\n\n", seqnum, acknum, payloadlength, winsize);
-// }
+  } else if ( strcmp("SYN", previous_flag) == 0 ) {
+    
+  } else if ( strcmp("FIN", previous_flag) == 0 ) {
+    
+  } else if ( strcmp("RST", previous_flag) == 0 ) {
+    
+  } else if ( strcmp("init", previous_flag) == 0 ) {
+    packet = buildRDPHeader(SYN_TYPE, 0, 0, 0, 0);
+  } else {
+
+  }
+  sendPacket(sockfd, packet, addr, len);
+}
+
+char* buildRDPHeader(int type, int seqnum, int acknum, int payloadlength, int winsize) {
+
+  static char header[MAXBUFLEN];
+  char *typeString = NULL;
+
+  switch ( type ) {
+    case DAT_TYPE:
+      typeString = "DAT";
+      break;
+    case ACK_TYPE:
+      typeString = "ACK";
+      break;
+    case SYN_TYPE:
+      typeString = "SYN";
+      break;
+    case FIN_TYPE:
+      typeString = "FIN";
+      break;
+    case RST_TYPE:
+      typeString = "RST";
+      break;
+    default:
+      typeString = "RST";
+      break;
+  }
+
+  sprintf(header, "UVicCSc361 %s %i %i %i %i\n\n\0", typeString, seqnum, acknum, payloadlength, winsize);
+
+  char *finishedHeader = (char*) &header;
+  return finishedHeader;
+}
 
 struct sockaddr_in setAddressAndPortNo(char *addr, int portno) {
 
