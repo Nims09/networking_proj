@@ -26,10 +26,38 @@
 #define FIN_TYPE 3
 #define RST_TYPE 4
 
-// Builds a packet to be sent over the wire
-char* buildRDPHeader(int type, int seqnum, int acknum, int payloadlength, int winsize);
+#define MAG_FIELD 0
+#define TYP_FIELD 1
+#define SEQ_FIELD 2
+#define ACK_FIELD 3
+#define LEN_FIELD 4
+#define WIN_FIELD 5
+#define DIP_FIELD 6
+#define DPT_FIELD 7
+#define SIP_FIELD 8
+#define SPT_FIELD 9 
+#define DAT_FIELD 10
 
-void buildRDPPacket(char *previous_flag, int seqnum, int acknum, int payloadlength, int winsize, char *payload, int sockfd, struct sockaddr_in addr, socklen_t len);
+#define PROTOCOL_TOKEN "UVicCSc361"
+
+struct packet {
+  int type;
+  int seqnum;
+  int acknum;
+  int payload;
+  int window;
+  int data;
+  char* dest_ip;
+  int dest_port;
+  char* src_ip;
+  int src_port;
+};
+
+// Builds a packet to be sent over the wire
+char* buildRDPHeader(int type, int seqnum, int acknum, int payloadlength, int winsize, char* destip, int destportno, char*srcip, int srcportno);
+
+// Builds a packet based on a previous packet
+void buildRDPPacket(char *previous_flag, int seqnum, int acknum, int payloadlength, int winsize, char* destip, int destportno, char*srcip, int srcportno, char *payload, int sockfd, struct sockaddr_in addr, socklen_t len);
 
 // Set portNo on an addr
 struct sockaddr_in setAddressAndPortNo(char *addr, int portno);
@@ -39,6 +67,12 @@ int sendPacket(int sockfd, char *packet, struct sockaddr_in addr, socklen_t len)
 
 // Confirm the file exists
 int checkFilePath(char *loc);
+
+// Converts a string to an int
+int strToInt(char *string);
+
+// Prints a packet to STD out
+void printPacket(struct  packet p);
 
 int main(int argc, char *argv[]) {
 	int sockfd;
@@ -50,7 +84,6 @@ int main(int argc, char *argv[]) {
 	struct sockaddr_in recv_addr, sender_addr;
   char buffer[MAXBUFLEN]; 
   socklen_t recv_len, sender_len;
-
 
 	// Confirm command line args
   if ( argc != 6 ) {
@@ -120,13 +153,13 @@ int main(int argc, char *argv[]) {
     fclose(fp);
   }
 
-  printf(">>>%s\n", buildRDPHeader(DAT_TYPE, 0, 0, 0, 0));
+  printf(">>>%s\n", buildRDPHeader(DAT_TYPE, 0, 0, 0, 0, dest_address, dest_portno, address, portno));
 
   // We are now connected and serving
   printf("rdps is running on RDP port %i.\n", portno);
 
   // Initialize protocol
-  buildRDPPacket("init", 0, 0, 0, 0, payload, sockfd, recv_addr, recv_len);
+  buildRDPPacket("init", 0, 0, 0, 0, dest_address, dest_portno, address, portno, payload, sockfd, recv_addr, recv_len);
 
   // Running loop
   while ( 1 ) {
@@ -144,10 +177,9 @@ int main(int argc, char *argv[]) {
 	return -1;
 }
 
-void buildRDPPacket(char *previous_flag, int seqnum, int acknum, int payloadlength, int winsize, char *payload, int sockfd, struct sockaddr_in addr, socklen_t len) {
+void buildRDPPacket(char *previous_flag, int seqnum, int acknum, int payloadlength, int winsize, char* destip, int destportno, char*srcip, int srcportno, char *payload, int sockfd, struct sockaddr_in addr, socklen_t len) {
   int type = -1; 
   char* packet = NULL;
-  printf("check init flag%d\n", (strcmp("init", previous_flag) != 0));
 
   if ( strcmp("DAT", previous_flag) == 0 ) {
 
@@ -160,14 +192,15 @@ void buildRDPPacket(char *previous_flag, int seqnum, int acknum, int payloadleng
   } else if ( strcmp("RST", previous_flag) == 0 ) {
     
   } else if ( strcmp("init", previous_flag) == 0 ) {
-    packet = buildRDPHeader(SYN_TYPE, 0, 0, 0, 0);
+    packet = buildRDPHeader(SYN_TYPE, 0, 0, 0, 0, destip, destportno, srcip, srcportno);
   } else {
 
   }
   sendPacket(sockfd, packet, addr, len);
 }
 
-char* buildRDPHeader(int type, int seqnum, int acknum, int payloadlength, int winsize) {
+// TODO: ADD SOURCE AND DEST PORT NUM HERE
+char* buildRDPHeader(int type, int seqnum, int acknum, int payloadlength, int winsize, char* destip, int destportno, char*srcip, int srcportno) {
 
   static char header[MAXBUFLEN];
   char *typeString = NULL;
@@ -193,7 +226,7 @@ char* buildRDPHeader(int type, int seqnum, int acknum, int payloadlength, int wi
       break;
   }
 
-  sprintf(header, "UVicCSc361 %s %i %i %i %i\n\n\0", typeString, seqnum, acknum, payloadlength, winsize);
+  sprintf(header, "%s %s %i %i %i %i %s %i %s %i\n\n\0", PROTOCOL_TOKEN, typeString, seqnum, acknum, payloadlength, winsize, destip, destportno, srcip, srcportno);
 
   char *finishedHeader = (char*) &header;
   return finishedHeader;
@@ -221,6 +254,19 @@ int checkFilePath(char *loc) {
     return access(loc, F_OK);
 }
 
+// TODO: make this function more robust
+int strToInt(char *string) {
+  return atoi(string);
+}
+
+void printPacket(struct packet p) {
+  printf("Packet: \n\t  type: %d      \n\t seqnum: %d    \n\t acknum: %d    \n\t payload: %d   \n\t window: %d    \n\t data: %s      \n\t dest_ip: %s   \n\t dest_port: %d \n\t src_ip: %s    \n\t src_port: %d  \n\t \n", p.type, p.seqnum, p.acknum, p.payload, p.window, p.data, p.dest_ip, p.dest_port, p.src_ip, p.src_port);
+}
+
+ /*
+  The buffer is the buffer you're working with, you can clear space in it as you write things to the file.
+ */
+
  /*
   Reciever initiates a file, thats where all its stored data is saved
   Sender specifies a file to send to the reciever
@@ -247,4 +293,16 @@ int checkFilePath(char *loc) {
   }
   printf("sz %d\n", size);
   printf("cnt %d\n", firstCount);
+  */
+
+  /*
+  For assign: Reciever has some buffer (window) as the buffer gets filled, window size changes, on the reciever end, it can read its buffer into the file and create more space in its window.
+
+  - The packet on SYN will send a packet to the receiver with its IP/Port/ Dst/port this goes to the NAT which will make some changes according to translation.
+  - The router keeps a table of src_ip, src_port, dst_ip, dst_port, when it gets the first packet it makes an entry
+  - Then does a network address translation on the entry
+
+  NAT and router destinations:
+  - dst_ip/port and src_ip/port are fields in the header
+  - we pretend the NAT is translating these addresses and take them as they are recieved by either client
   */

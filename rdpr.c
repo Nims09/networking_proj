@@ -26,19 +26,55 @@
 #define FIN_TYPE 3
 #define RST_TYPE 4
 
-// Builds a packet to be sent over the wire
-char* buildRDPHeader(int type, int seqnum, int acknum, int payloadlength, int winsize);
+#define MAG_FIELD 0
+#define TYP_FIELD 1
+#define SEQ_FIELD 2
+#define ACK_FIELD 3
+#define LEN_FIELD 4
+#define WIN_FIELD 5
+#define DIP_FIELD 6
+#define DPT_FIELD 7
+#define SIP_FIELD 8
+#define SPT_FIELD 9 
+#define DAT_FIELD 10
 
-void buildRDPPacket(char *previous_flag, int seqnum, int acknum, int payloadlength, int winsize, char *payload, int sockfd, struct sockaddr_in addr, socklen_t len);
+#define PROTOCOL_TOKEN "UVicCSc361"
+
+struct packet {
+  int type;
+  int seqnum;
+  int acknum;
+  int payload;
+  int window;
+  char* data;
+  char* dest_ip;
+  int dest_port;
+  char* src_ip;
+  int src_port;
+};
+
+// Builds a packet to be sent over the wire
+char* buildRDPHeader(int type, int seqnum, int acknum, int payloadlength, int winsize, char* destip, int destportno, char*srcip, int srcportno);
+
+// Builds a packet based on a previous packet
+void buildRDPPacket(char *previous_flag, int seqnum, int acknum, int payloadlength, int winsize, char* destip, int destportno, char*srcip, int srcportno, char *payload, int sockfd, struct sockaddr_in addr, socklen_t len);
+
+struct packet parsePacket(char* packet);
 
 // Set portNo on an addr
 struct sockaddr_in setAddressAndPortNo(char *addr, int portno);
 
 // Send a string to the client
-int sendString(int sockfd, char *buffer, struct sockaddr_in addr, socklen_t len);
+int sendPacket(int sockfd, char *buffer, struct sockaddr_in addr, socklen_t len);
 
 // Confirm the file exists
 int checkFilePath(char *loc);
+
+// Converts a string to an int
+int strToInt(char *string);
+
+// Prints a packet to STD out
+void printPacket(struct  packet p);
 
 int main(int argc, char *argv[]) {
 	int sockfd;
@@ -47,7 +83,8 @@ int main(int argc, char *argv[]) {
   char *file_path;  
 	struct sockaddr_in recv_addr, sender_addr;
   socklen_t sender_len;
-  char buffer[MAXBUFLEN];   
+  // TODO: fix this max bufflen its grabbing extra chars
+  char buffer[MAXBUFLEN]; 
 
 	// Confirm command line args
   if ( argc != 4 ) {
@@ -107,18 +144,16 @@ int main(int argc, char *argv[]) {
         return -1;
     }
 
-    printf("%s\n", buffer);
-
-
+    // printf("%s\n", buffer);
+    printPacket(parsePacket(buffer));
   }
 
 	return -1;
 }
 
-void buildRDPPacket(char *previous_flag, int seqnum, int acknum, int payloadlength, int winsize, char *payload, int sockfd, struct sockaddr_in addr, socklen_t len) {
+void buildRDPPacket(char *previous_flag, int seqnum, int acknum, int payloadlength, int winsize, char* destip, int destportno, char*srcip, int srcportno, char *payload, int sockfd, struct sockaddr_in addr, socklen_t len) {
   int type = -1; 
   char* packet = NULL;
-  printf("check init flag%d\n", (strcmp("init", previous_flag) != 0));
 
   if ( strcmp("DAT", previous_flag) == 0 ) {
 
@@ -131,14 +166,14 @@ void buildRDPPacket(char *previous_flag, int seqnum, int acknum, int payloadleng
   } else if ( strcmp("RST", previous_flag) == 0 ) {
     
   } else if ( strcmp("init", previous_flag) == 0 ) {
-    packet = buildRDPHeader(SYN_TYPE, 0, 0, 0, 0);
+    packet = buildRDPHeader(SYN_TYPE, 0, 0, 0, 0, destip, destportno, srcip, srcportno);
   } else {
 
   }
   sendPacket(sockfd, packet, addr, len);
 }
 
-char* buildRDPHeader(int type, int seqnum, int acknum, int payloadlength, int winsize) {
+char* buildRDPHeader(int type, int seqnum, int acknum, int payloadlength, int winsize, char* destip, int destportno, char*srcip, int srcportno) {
 
   static char header[MAXBUFLEN];
   char *typeString = NULL;
@@ -164,10 +199,83 @@ char* buildRDPHeader(int type, int seqnum, int acknum, int payloadlength, int wi
       break;
   }
 
-  sprintf(header, "UVicCSc361 %s %i %i %i %i\n\n\0", typeString, seqnum, acknum, payloadlength, winsize);
+  sprintf(header, "%s %s %i %i %i %i %s %i %s %i\n\n\0", PROTOCOL_TOKEN, typeString, seqnum, acknum, payloadlength, winsize, destip, destportno, srcip, srcportno);
 
   char *finishedHeader = (char*) &header;
   return finishedHeader;
+}
+
+struct packet parsePacket(char* packet) {
+  int currentToken = 0;
+  struct packet p;
+
+  char* token = strtok(packet, " ");
+  while ( token && currentToken < DAT_FIELD) {
+
+    switch ( currentToken ) {
+      case MAG_FIELD:
+        if ( strcmp(token, PROTOCOL_TOKEN) != 0 ) {
+          p.type = RST_TYPE;
+        }
+        break;
+      case TYP_FIELD:
+        if ( strcmp("DAT", token) == 0 ) {
+          p.type = DAT_TYPE;
+        } else if ( strcmp("ACK", token) == 0 ) {
+          p.type = ACK_TYPE;
+        } else if ( strcmp("SYN", token) == 0 ) {
+          p.type = SYN_TYPE;
+        } else if ( strcmp("FIN", token) == 0 ) {
+          p.type = FIN_TYPE;
+        } else if ( strcmp("RST", token) == 0 ) {
+          p.type = RST_TYPE;
+        } else if ( strcmp("init", token) == 0 ) {
+          p.type = RST_TYPE;
+        } else {
+          p.type = RST_TYPE;
+        }
+        break;
+      case SEQ_FIELD:
+        p.seqnum = strToInt(token);
+        break;
+      case ACK_FIELD:
+        p.acknum = strToInt(token);
+        break;
+      case LEN_FIELD:
+        p.payload = strToInt(token);
+        break;
+      case WIN_FIELD:
+        p.window = strToInt(token);
+        break;
+      case DIP_FIELD:
+        p.dest_ip = token;
+        break;
+      case DPT_FIELD:
+        p.dest_port = strToInt(token);
+        break;
+      case SIP_FIELD:
+        p.src_ip = token;
+        break;
+      case SPT_FIELD:
+        p.src_port = strToInt(token);
+        break;
+      case DAT_FIELD:
+        // This should just be what is left if its a data type
+        break;
+      default:
+        break;
+    }
+    currentToken++;
+    token = strtok(NULL, " ");
+  }
+
+  if (p.type == DAT_TYPE) {
+    p.data = token;
+  } else {
+    p.data = "";
+  }
+
+  return p;
 }
 
 struct sockaddr_in setAddressAndPortNo(char *addr, int portno) {
@@ -180,7 +288,7 @@ struct sockaddr_in setAddressAndPortNo(char *addr, int portno) {
   return to;
 }
 
-int sendString(int sockfd, char *buffer, struct sockaddr_in addr, socklen_t len) {
+int sendPacket(int sockfd, char *buffer, struct sockaddr_in addr, socklen_t len) {
     if ((sendto(sockfd, buffer, strlen(buffer), 0, (struct sockaddr *)&addr, len)) == -1) {
         perror("Error sending string to socket.");
         return -1;
@@ -189,5 +297,14 @@ int sendString(int sockfd, char *buffer, struct sockaddr_in addr, socklen_t len)
 }
 
 int checkFilePath(char *loc) {
-    return access(loc, F_OK);
+  return access(loc, F_OK);
+}
+  
+// TODO: make this function more robust
+int strToInt(char *string) {
+  return atoi(string);
+}
+
+void printPacket(struct packet p) {
+  printf("Packet: \n\t  type: %d      \n\t seqnum: %d    \n\t acknum: %d    \n\t payload: %d   \n\t window: %d    \n\t data: %s      \n\t dest_ip: %s   \n\t dest_port: %d \n\t src_ip: %s    \n\t src_port: %d  \n\t \n", p.type, p.seqnum, p.acknum, p.payload, p.window, p.data, p.dest_ip, p.dest_port, p.src_ip, p.src_port);
 }
