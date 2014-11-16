@@ -17,9 +17,11 @@
 #include <errno.h>
 #include <time.h> 
 
+#define WINDOWSIZE 4096
 #define MAXPACKETSIZE 1024
 #define MAXBUFLEN 256
 
+#define INIT_TYPE -1
 #define DAT_TYPE 0
 #define ACK_TYPE 1
 #define SYN_TYPE 2
@@ -57,8 +59,9 @@ struct packet {
 char* buildRDPHeader(int type, int seqnum, int acknum, int payloadlength, int winsize, char* destip, int destportno, char*srcip, int srcportno);
 
 // Builds a packet based on a previous packet
-void buildRDPPacket(char *previous_flag, int seqnum, int acknum, int payloadlength, int winsize, char* destip, int destportno, char*srcip, int srcportno, char *payload, int sockfd, struct sockaddr_in addr, socklen_t len);
+void buildRDPPacket(int flag, int seqnum, int acknum, int payloadlength, int winsize, char* destip, int destportno, char*srcip, int srcportno, char *payload, int sockfd, struct sockaddr_in addr, socklen_t len);
 
+// Parses a string packet into a struct
 struct packet parsePacket(char* packet);
 
 // Set portNo on an addr
@@ -81,10 +84,13 @@ int main(int argc, char *argv[]) {
 	int portno;
 	char *address;
   char *file_path;  
-	struct sockaddr_in recv_addr, sender_addr;
-  socklen_t sender_len;
+  int numbytes;
+  struct sockaddr_in recv_addr, sender_addr;
+  socklen_t sender_len, recv_len;
   // TODO: fix this max bufflen its grabbing extra chars
   char buffer[MAXBUFLEN]; 
+  char window[WINDOWSIZE];
+  int optval = 1;
 
 	// Confirm command line args
   if ( argc != 4 ) {
@@ -108,11 +114,17 @@ int main(int argc, char *argv[]) {
   // Connect and bind
   recv_addr = setAddressAndPortNo(address, portno);
 
+  if ( setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval)) == -1 ) {
+    fprintf(stderr, "SEN: Error error on setsockopt()\n" );    
+  }
+
   if ( bind(sockfd, (struct sockaddr *) &recv_addr, sizeof(recv_addr)) < 0) {
   	close(sockfd);
   	fprintf(stderr, "REC: Error on error on bind()\n" );
   	return -1;
   }
+  sender_len = sizeof(sender_addr);
+
 
   // Open the file for writing
   if ( checkFilePath(file_path) < 0 ) {
@@ -135,43 +147,61 @@ int main(int argc, char *argv[]) {
 
   // Running loop
   while ( 1 ) {
-    sender_len = sizeof(sender_addr);
+    struct packet p;
+    
+    // SYN Handshake
+    while ( 1 ) {
 
-    int numbytes;
-    if ((numbytes = recvfrom(sockfd, buffer, MAXBUFLEN-1 , 0,
-        (struct sockaddr *)&sender_addr, &sender_len)) == -1) {
-        perror("sws: error on recvfrom()!");
-        return -1;
+      if ((numbytes = recvfrom(sockfd, buffer, MAXBUFLEN-1 , 0,
+          (struct sockaddr *)&sender_addr, &sender_len)) == -1) {
+          perror("REC: error on recvfrom()!");
+          return -1;
+      }
+
+      p = parsePacket(buffer);
+
+      if ( p.type == SYN_TYPE ) {
+        buildRDPPacket(SYN_TYPE, p.acknum, (p.seqnum+1), 0, 0, address, portno, p.src_ip, p.src_port, "", sockfd, sender_addr, sender_len);
+        break;
+      } else {
+        continue;
+      }    
     }
 
-    // printf("%s\n", buffer);
-    printPacket(parsePacket(buffer));
+    // Begin accepting data
+    while ( 1 ) {
+      if ((numbytes = recvfrom(sockfd, buffer, MAXBUFLEN-1 , 0,
+          (struct sockaddr *)&sender_addr, &sender_len)) == -1) {
+          perror("REC: error on recvfrom()!");
+          return -1;
+      }
+      p = parsePacket(buffer);
+      printPacket(p);
+
+    }
+
+
   }
+
 
 	return -1;
 }
 
-void buildRDPPacket(char *previous_flag, int seqnum, int acknum, int payloadlength, int winsize, char* destip, int destportno, char*srcip, int srcportno, char *payload, int sockfd, struct sockaddr_in addr, socklen_t len) {
+void buildRDPPacket(int flag, int seqnum, int acknum, int payloadlength, int winsize, char* destip, int destportno, char*srcip, int srcportno, char *payload, int sockfd, struct sockaddr_in addr, socklen_t len) {
   int type = -1; 
-  char* packet = NULL;
+  static char packet[MAXPACKETSIZE];
+  char* header = NULL;
 
-  if ( strcmp("DAT", previous_flag) == 0 ) {
+  header = buildRDPHeader(flag, 0, 0, 0, 0, destip, destportno, srcip, srcportno);    
 
-  } else if ( strcmp("ACK", previous_flag) == 0 ) {
-
-  } else if ( strcmp("SYN", previous_flag) == 0 ) {
-    
-  } else if ( strcmp("FIN", previous_flag) == 0 ) {
-    
-  } else if ( strcmp("RST", previous_flag) == 0 ) {
-    
-  } else if ( strcmp("init", previous_flag) == 0 ) {
-    packet = buildRDPHeader(SYN_TYPE, 0, 0, 0, 0, destip, destportno, srcip, srcportno);
-  } else {
-
+  if ( flag != DAT_TYPE ) {
+    payload = "";
   }
+
+  sprintf(packet, "%s%s\n\0", header, payload);
   sendPacket(sockfd, packet, addr, len);
 }
+
 
 char* buildRDPHeader(int type, int seqnum, int acknum, int payloadlength, int winsize, char* destip, int destportno, char*srcip, int srcportno) {
 
@@ -199,7 +229,7 @@ char* buildRDPHeader(int type, int seqnum, int acknum, int payloadlength, int wi
       break;
   }
 
-  sprintf(header, "%s %s %i %i %i %i %s %i %s %i\n\n\0", PROTOCOL_TOKEN, typeString, seqnum, acknum, payloadlength, winsize, destip, destportno, srcip, srcportno);
+  sprintf(header, "%s %s %i %i %i %i %s %i %s %i \n\n\0", PROTOCOL_TOKEN, typeString, seqnum, acknum, payloadlength, winsize, destip, destportno, srcip, srcportno);
 
   char *finishedHeader = (char*) &header;
   return finishedHeader;
@@ -265,12 +295,15 @@ struct packet parsePacket(char* packet) {
       default:
         break;
     }
+    printf("%d >> %s\n", currentToken,  token);
     currentToken++;
     token = strtok(NULL, " ");
   }
 
+  printf("%d >> %s\n", currentToken,  token);
   if (p.type == DAT_TYPE) {
-    p.data = token;
+    // Skip new lines and get data
+    p.data = &token[2];
   } else {
     p.data = "";
   }

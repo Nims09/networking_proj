@@ -17,9 +17,11 @@
 #include <errno.h>
 #include <time.h> 
 
+#define WINDOWSIZE 4096
 #define MAXPACKETSIZE 1024
 #define MAXBUFLEN 256
 
+#define INIT_TYPE -1
 #define DAT_TYPE 0
 #define ACK_TYPE 1
 #define SYN_TYPE 2
@@ -46,7 +48,7 @@ struct packet {
   int acknum;
   int payload;
   int window;
-  int data;
+  char* data;
   char* dest_ip;
   int dest_port;
   char* src_ip;
@@ -57,7 +59,10 @@ struct packet {
 char* buildRDPHeader(int type, int seqnum, int acknum, int payloadlength, int winsize, char* destip, int destportno, char*srcip, int srcportno);
 
 // Builds a packet based on a previous packet
-void buildRDPPacket(char *previous_flag, int seqnum, int acknum, int payloadlength, int winsize, char* destip, int destportno, char*srcip, int srcportno, char *payload, int sockfd, struct sockaddr_in addr, socklen_t len);
+void buildRDPPacket(int previous_flag, int seqnum, int acknum, int payloadlength, int winsize, char* destip, int destportno, char*srcip, int srcportno, char *payload, int sockfd, struct sockaddr_in addr, socklen_t len);
+
+// Parses a string packet into a struct
+struct packet parsePacket(char* packet);
 
 // Set portNo on an addr
 struct sockaddr_in setAddressAndPortNo(char *addr, int portno);
@@ -81,9 +86,12 @@ int main(int argc, char *argv[]) {
 	char *address;
 	char *dest_address;
   char *file_path;
+  int numbytes;
 	struct sockaddr_in recv_addr, sender_addr;
   char buffer[MAXBUFLEN]; 
+  char window[WINDOWSIZE];
   socklen_t recv_len, sender_len;
+  int optval = 1;
 
 	// Confirm command line args
   if ( argc != 6 ) {
@@ -110,13 +118,17 @@ int main(int argc, char *argv[]) {
   recv_addr = setAddressAndPortNo(dest_address, dest_portno);
   sender_addr = setAddressAndPortNo(address, portno);
 
-  // TODO: change this to use setsockopt with SO_REUSEADDR
-  // refrence: http://www.beej.us/guide/bgnet/output/html/multipage/setsockoptman.html
+  // set SO_REUSEADDR on a socket to true (1):
+  if ( setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval)) == -1 ) {
+    fprintf(stderr, "SEN: Error error on setsockopt()\n" );    
+  }
+
   if ( bind(sockfd, (struct sockaddr *) &sender_addr, sizeof(sender_addr)) < 0) {
     close(sockfd);
     fprintf(stderr, "SEN: Error error on bind()\n" );
     return -1;
   }
+
 
   recv_len = sizeof(recv_addr);
   sender_len = sizeof(sender_addr);
@@ -153,22 +165,50 @@ int main(int argc, char *argv[]) {
     fclose(fp);
   }
 
-  printf(">>>%s\n", buildRDPHeader(DAT_TYPE, 0, 0, 0, 0, dest_address, dest_portno, address, portno));
-
   // We are now connected and serving
   printf("rdps is running on RDP port %i.\n", portno);
 
-  // Initialize protocol
-  buildRDPPacket("init", 0, 0, 0, 0, dest_address, dest_portno, address, portno, payload, sockfd, recv_addr, recv_len);
+  int initial_seqnum = 0;
+  int initial_acknum = 0;
+
+  int counterz = 0;
+  while ( counterz < strlen(payload) ) {
+    printf("current >> %d\n", counterz);
+    printf( "%.100s", &payload[ counterz ] );
+    printf("\n");
+    counterz = counterz + 100;
+  }
 
   // Running loop
   while ( 1 ) {
+    struct packet p;    
 
-    int numbytes;
-    if ((numbytes = recvfrom(sockfd, buffer, MAXBUFLEN-1 , 0,
-        (struct sockaddr *)&recv_addr, &recv_len)) == -1) {
-        perror("SEN: Error on recvfrom()!");
-        return -1;
+    // Initialize protocol
+    buildRDPPacket(SYN_TYPE, initial_seqnum, initial_acknum, 0, 0, dest_address, dest_portno, address, portno, "", sockfd, recv_addr, recv_len);    
+
+    // SYN Handshake completion
+    while( 1 ) {
+      if ((numbytes = recvfrom(sockfd, buffer, MAXBUFLEN-1 , 0,
+          (struct sockaddr *)&recv_addr, &recv_len)) == -1) {
+          perror("SEN: Error on recvfrom()!");
+          return -1;
+      }
+
+      p = parsePacket(buffer);
+
+      if ( p.type == SYN_TYPE ) {
+        break;
+      } else {
+        continue;
+      }
+    }
+
+    // Begin sending data
+    while ( 1 ) {
+      buildRDPPacket(DAT_TYPE, p.acknum, (p.seqnum+1), 0, 0, address, portno, p.src_ip, p.src_port, "test", sockfd, recv_addr, recv_len);
+      // XXX Just print the file as you would in pieces here so we know we can send it into packets
+      // Then start sending it in packets
+      // Then we can deal with ACKs and all that
     }
 
   }
@@ -177,29 +217,22 @@ int main(int argc, char *argv[]) {
 	return -1;
 }
 
-void buildRDPPacket(char *previous_flag, int seqnum, int acknum, int payloadlength, int winsize, char* destip, int destportno, char*srcip, int srcportno, char *payload, int sockfd, struct sockaddr_in addr, socklen_t len) {
+
+void buildRDPPacket(int flag, int seqnum, int acknum, int payloadlength, int winsize, char* destip, int destportno, char*srcip, int srcportno, char *payload, int sockfd, struct sockaddr_in addr, socklen_t len) {
   int type = -1; 
-  char* packet = NULL;
+  static char packet[MAXPACKETSIZE];
+  char* header = NULL;
 
-  if ( strcmp("DAT", previous_flag) == 0 ) {
+  header = buildRDPHeader(flag, 0, 0, 0, 0, destip, destportno, srcip, srcportno);    
 
-  } else if ( strcmp("ACK", previous_flag) == 0 ) {
-
-  } else if ( strcmp("SYN", previous_flag) == 0 ) {
-    
-  } else if ( strcmp("FIN", previous_flag) == 0 ) {
-    
-  } else if ( strcmp("RST", previous_flag) == 0 ) {
-    
-  } else if ( strcmp("init", previous_flag) == 0 ) {
-    packet = buildRDPHeader(SYN_TYPE, 0, 0, 0, 0, destip, destportno, srcip, srcportno);
-  } else {
-
+  if ( flag != DAT_TYPE ) {
+    payload = "";
   }
+
+  sprintf(packet, "%s%s\n\0", header, payload);
   sendPacket(sockfd, packet, addr, len);
 }
 
-// TODO: ADD SOURCE AND DEST PORT NUM HERE
 char* buildRDPHeader(int type, int seqnum, int acknum, int payloadlength, int winsize, char* destip, int destportno, char*srcip, int srcportno) {
 
   static char header[MAXBUFLEN];
@@ -226,10 +259,84 @@ char* buildRDPHeader(int type, int seqnum, int acknum, int payloadlength, int wi
       break;
   }
 
-  sprintf(header, "%s %s %i %i %i %i %s %i %s %i\n\n\0", PROTOCOL_TOKEN, typeString, seqnum, acknum, payloadlength, winsize, destip, destportno, srcip, srcportno);
+  sprintf(header, "%s %s %i %i %i %i %s %i %s %i \n\n\0", PROTOCOL_TOKEN, typeString, seqnum, acknum, payloadlength, winsize, destip, destportno, srcip, srcportno);
 
   char *finishedHeader = (char*) &header;
   return finishedHeader;
+}
+
+
+struct packet parsePacket(char* packet) {
+  int currentToken = 0;
+  struct packet p;
+
+  char* token = strtok(packet, " ");
+  while ( token && currentToken < DAT_FIELD) {
+
+    switch ( currentToken ) {
+      case MAG_FIELD:
+        if ( strcmp(token, PROTOCOL_TOKEN) != 0 ) {
+          p.type = RST_TYPE;
+        }
+        break;
+      case TYP_FIELD:
+        if ( strcmp("DAT", token) == 0 ) {
+          p.type = DAT_TYPE;
+        } else if ( strcmp("ACK", token) == 0 ) {
+          p.type = ACK_TYPE;
+        } else if ( strcmp("SYN", token) == 0 ) {
+          p.type = SYN_TYPE;
+        } else if ( strcmp("FIN", token) == 0 ) {
+          p.type = FIN_TYPE;
+        } else if ( strcmp("RST", token) == 0 ) {
+          p.type = RST_TYPE;
+        } else if ( strcmp("init", token) == 0 ) {
+          p.type = RST_TYPE;
+        } else {
+          p.type = RST_TYPE;
+        }
+        break;
+      case SEQ_FIELD:
+        p.seqnum = strToInt(token);
+        break;
+      case ACK_FIELD:
+        p.acknum = strToInt(token);
+        break;
+      case LEN_FIELD:
+        p.payload = strToInt(token);
+        break;
+      case WIN_FIELD:
+        p.window = strToInt(token);
+        break;
+      case DIP_FIELD:
+        p.dest_ip = token;
+        break;
+      case DPT_FIELD:
+        p.dest_port = strToInt(token);
+        break;
+      case SIP_FIELD:
+        p.src_ip = token;
+        break;
+      case SPT_FIELD:
+        p.src_port = strToInt(token);
+        break;
+      case DAT_FIELD:
+        // This should just be what is left if its a data type
+        break;
+      default:
+        break;
+    }
+    currentToken++;
+    token = strtok(NULL, " ");
+  }
+
+  if (p.type == DAT_TYPE) {
+    p.data = token;
+  } else {
+    p.data = "";
+  }
+
+  return p;
 }
 
 struct sockaddr_in setAddressAndPortNo(char *addr, int portno) {
@@ -305,4 +412,70 @@ void printPacket(struct packet p) {
   NAT and router destinations:
   - dst_ip/port and src_ip/port are fields in the header
   - we pretend the NAT is translating these addresses and take them as they are recieved by either client
+  */
+
+  /* SOME CODE OR w/either
+
+  if ( strcmp("DAT", previous_flag) == 0 ) {
+
+  } else if ( strcmp("ACK", previous_flag) == 0 ) {
+
+  } else if ( strcmp("SYN", previous_flag) == 0 ) {
+    
+  } else if ( strcmp("FIN", previous_flag) == 0 ) {
+    
+  } else if ( strcmp("RST", previous_flag) == 0 ) {
+    
+  } else if ( strcmp("init", previous_flag) == 0 ) {
+    packet = buildRDPHeader(SYN_TYPE, 0, 0, 0, 0, destip, destportno, srcip, srcportno);
+  } else {
+
+  }
+  */
+
+  /*
+  void buildRDPPacket(int previous_flag, int seqnum, int acknum, int payloadlength, int winsize, char* destip, int destportno, char*srcip, int srcportno, char *payload, int sockfd, struct sockaddr_in addr, socklen_t len) {
+    int type = -1; 
+    char* packet = NULL;
+
+    switch ( previous_flag ) {
+      case DAT_TYPE:
+        break;
+      case ACK_TYPE:
+        break;
+      case SYN_TYPE:
+        break;
+      case FIN_TYPE:
+        break;
+      case RST_TYPE:
+        break;
+      case INIT_TYPE:
+        packet = buildRDPHeader(SYN_TYPE, 0, 0, 0, 0, destip, destportno, srcip, srcportno);    
+        break;
+      default:
+        break;
+    }
+
+    sendPacket(sockfd, packet, addr, len);
+  }
+  */
+
+  /*
+  NOTE: Check what the headers end up being about size wise and just only send packets of actual data supplmeneting this size
+  */
+
+  // TODO: change this to use setsockopt with SO_REUSEADDR
+  // refrence: http://www.beej.us/guide/bgnet/output/html/multipage/setsockoptman.html
+  // ------->  
+
+  /*
+  // TO READ A FILLE PART BY PART
+  int counterz = 0;
+  while ( counterz < strlen(payload) ) {
+    printf("current >> %d\n", counterz);
+    printf( "%.100s", &payload[ counterz ] );
+    printf("\n");
+    counterz = counterz + 100;
+  }
+  }
   */
