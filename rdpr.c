@@ -19,6 +19,7 @@
 
 #define WINDOWSIZE 4096
 #define MAXPACKETSIZE 1024
+#define DATAPACKETSIZE 1000
 #define MAXBUFLEN 256
 
 #define INIT_TYPE -1
@@ -140,7 +141,7 @@ int main(int argc, char *argv[]) {
   // TODO: place this better
   char *text = "Write this to the file";
   fprintf(write_file, "TEST: Some text: %s\n", text);
-  fclose(write_file); // TODO: Move me to the end
+  printf("tracce %s\n", text);
 
   // We are now connected and serving
   printf("rdpr is running on RDP port %i.\n", portno);
@@ -161,7 +162,7 @@ int main(int argc, char *argv[]) {
       p = parsePacket(buffer);
 
       if ( p.type == SYN_TYPE ) {
-        buildRDPPacket(SYN_TYPE, p.acknum, (p.seqnum+1), 0, 0, address, portno, p.src_ip, p.src_port, "", sockfd, sender_addr, sender_len);
+        buildRDPPacket(SYN_TYPE, p.acknum, (p.seqnum+1), 0, sizeof(window), address, portno, p.src_ip, p.src_port, "", sockfd, sender_addr, sender_len);
         break;
       } else {
         continue;
@@ -176,13 +177,22 @@ int main(int argc, char *argv[]) {
           return -1;
       }
       p = parsePacket(buffer);
-      printPacket(p);
 
+      buildRDPPacket(ACK_TYPE, p.acknum, (p.seqnum+1), 0, 0, p.dest_ip, p.dest_port, p.src_ip, p.src_port, "", sockfd, sender_addr, sender_len);
+
+      // printPacket(p);
+      printf("%s", p.data);
+      fprintf(write_file, "%s", p.data);
+
+      // TODO Better implement this
+      if ( p.type == FIN_TYPE ) {
+        break;
+      }
     }
-
+    fclose(write_file); // TODO: Move me to the end // XXX
+    break;
 
   }
-
 
 	return -1;
 }
@@ -295,15 +305,13 @@ struct packet parsePacket(char* packet) {
       default:
         break;
     }
-    printf("%d >> %s\n", currentToken,  token);
     currentToken++;
     token = strtok(NULL, " ");
   }
 
-  printf("%d >> %s\n", currentToken,  token);
   if (p.type == DAT_TYPE) {
-    // Skip new lines and get data
-    p.data = &token[2];
+    token = strtok(NULL, "\0");
+    p.data = token;
   } else {
     p.data = "";
   }

@@ -19,6 +19,7 @@
 
 #define WINDOWSIZE 4096
 #define MAXPACKETSIZE 1024
+#define DATAPACKETSIZE 1000
 #define MAXBUFLEN 256
 
 #define INIT_TYPE -1
@@ -171,13 +172,13 @@ int main(int argc, char *argv[]) {
   int initial_seqnum = 0;
   int initial_acknum = 0;
 
-  int counterz = 0;
-  while ( counterz < strlen(payload) ) {
-    printf("current >> %d\n", counterz);
-    printf( "%.100s", &payload[ counterz ] );
-    printf("\n");
-    counterz = counterz + 100;
-  }
+  // int counterz = 0;
+  // while ( counterz < strlen(payload) ) {
+  //   printf("current >> %d\n", counterz);
+  //   printf( "%.100s", &payload[ counterz ] );
+  //   printf("\n");
+  //   counterz = counterz + 100;
+  // }
 
   // Running loop
   while ( 1 ) {
@@ -188,13 +189,13 @@ int main(int argc, char *argv[]) {
 
     // SYN Handshake completion
     while( 1 ) {
-      if ((numbytes = recvfrom(sockfd, buffer, MAXBUFLEN-1 , 0,
+      if ((numbytes = recvfrom(sockfd, window, MAXBUFLEN-1 , 0,
           (struct sockaddr *)&recv_addr, &recv_len)) == -1) {
           perror("SEN: Error on recvfrom()!");
           return -1;
       }
 
-      p = parsePacket(buffer);
+      p = parsePacket(window);
 
       if ( p.type == SYN_TYPE ) {
         break;
@@ -205,11 +206,38 @@ int main(int argc, char *argv[]) {
 
     // Begin sending data
     while ( 1 ) {
-      buildRDPPacket(DAT_TYPE, p.acknum, (p.seqnum+1), 0, 0, address, portno, p.src_ip, p.src_port, "test", sockfd, recv_addr, recv_len);
-      // XXX Just print the file as you would in pieces here so we know we can send it into packets
-      // Then start sending it in packets
-      // Then we can deal with ACKs and all that
+      int counterz = 0;
+      char nextDataPacket[DATAPACKETSIZE];  
+      while ( counterz < strlen(payload) ) {
+      // while ( 1 ) {
+        // XXX Start sending data within window size, then wait for ACK from other side
+        // Once ACK recieved means other side's window is cleared and written to file, start sending again
+
+        // Send DATA Packet
+        sprintf(nextDataPacket, "%.100s\0", &payload[ counterz ]);
+        buildRDPPacket(DAT_TYPE, p.acknum, (p.seqnum+1), sizeof(nextDataPacket), sizeof(window), p.dest_ip, p.dest_port, p.src_ip, p.src_port, nextDataPacket, sockfd, recv_addr, recv_len);
+        
+        // Wait for ACK
+        if ((numbytes = recvfrom(sockfd, window, MAXBUFLEN-1 , 0,
+            (struct sockaddr *)&recv_addr, &recv_len)) == -1) {
+            perror("SEN: Error on recvfrom()!");
+            return -1;
+        }      
+
+        p = parsePacket(window);
+
+        if ( p.type != ACK_TYPE ) {
+          perror("SEN: Failed to recieve correct ACK!");
+          break;
+        }
+
+        counterz = counterz + 100; 
+      }
+      
     }
+
+    // TODO: implement better
+    buildRDPPacket(FIN_TYPE, 0, 0, 0, 0, " ", 0, " ", 0, " ", sockfd, recv_addr, recv_len);
 
   }
  
@@ -223,13 +251,14 @@ void buildRDPPacket(int flag, int seqnum, int acknum, int payloadlength, int win
   static char packet[MAXPACKETSIZE];
   char* header = NULL;
 
-  header = buildRDPHeader(flag, 0, 0, 0, 0, destip, destportno, srcip, srcportno);    
+  header = buildRDPHeader(flag, seqnum, acknum, payloadlength, winsize, destip, destportno, srcip, srcportno);    
 
   if ( flag != DAT_TYPE ) {
     payload = "";
   }
 
   sprintf(packet, "%s%s\n\0", header, payload);
+  printf("%s\n", packet);
   sendPacket(sockfd, packet, addr, len);
 }
 
@@ -259,8 +288,7 @@ char* buildRDPHeader(int type, int seqnum, int acknum, int payloadlength, int wi
       break;
   }
 
-  sprintf(header, "%s %s %i %i %i %i %s %i %s %i \n\n\0", PROTOCOL_TOKEN, typeString, seqnum, acknum, payloadlength, winsize, destip, destportno, srcip, srcportno);
-
+  sprintf(header, "%s %s %i %i %i %i %s %i %s %i \n\n\0", PROTOCOL_TOKEN, typeString, (seqnum+payloadlength), acknum, payloadlength, winsize, destip, destportno, srcip, srcportno);
   char *finishedHeader = (char*) &header;
   return finishedHeader;
 }
@@ -331,6 +359,7 @@ struct packet parsePacket(char* packet) {
   }
 
   if (p.type == DAT_TYPE) {
+    token = strtok(NULL, "\0");
     p.data = token;
   } else {
     p.data = "";
@@ -478,4 +507,8 @@ void printPacket(struct packet p) {
     counterz = counterz + 100;
   }
   }
+  */
+
+  /*
+  If you're having problems with sizes its likley because oif using strlen and size of interchangably which will yeild different results
   */
