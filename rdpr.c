@@ -138,16 +138,10 @@ int main(int argc, char *argv[]) {
       exit(1);
   }
 
-  // TODO: place this better
-  char *text = "Write this to the file";
-  fprintf(write_file, "TEST: Some text: %s\n", text);
-  printf("tracce %s\n", text);
-
   // We are now connected and serving
   printf("rdpr is running on RDP port %i.\n", portno);
 
   int window_size = sizeof(window);
-  printf("WIN SIZE: %d\n", window_size);
 
   // Running loop
   while ( 1 ) {
@@ -184,23 +178,19 @@ int main(int argc, char *argv[]) {
 
       p = parsePacket(window);
       
-      printf("rec seq: %d\n", p.seqnum);
-      printf("total rec: %d\n", total_recieved);
       if ( p.seqnum > total_recieved) {
         // We're getting duplicate packets don't write.
-        printf("%s", p.data);
         fprintf(write_file, "%s", p.data);
         total_recieved = p.seqnum;
       }
-
-      printf("sending ack for %d\n", p.seqnum);
 
       buildRDPPacket(ACK_TYPE, current_seqnum, p.seqnum, 0, window_size, p.dest_ip, p.dest_port, p.src_ip, p.src_port, "", sockfd, sender_addr, sender_len);
       current_seqnum++;
 
       // Finished transfering, closing handshake
       if ( p.type == FIN_TYPE ) {
-        buildRDPPacket(ACK_TYPE, current_seqnum, p.seqnum, 0, window_size, p.dest_ip, p.dest_port, p.src_ip, p.src_port, "", sockfd, sender_addr, sender_len);        
+        buildRDPPacket(ACK_TYPE, current_seqnum, p.seqnum, 0, window_size, p.dest_ip, p.dest_port, p.src_ip, p.src_port, "", sockfd, sender_addr, sender_len);  
+
         buildRDPPacket(FIN_TYPE, current_seqnum, p.seqnum, 0, window_size, p.dest_ip, p.dest_port, p.src_ip, p.src_port, "", sockfd, sender_addr, sender_len); 
 
         if ((numbytes = recvfrom(sockfd, window, MAXBUFLEN-1 , 0,

@@ -201,7 +201,6 @@ int main(int argc, char *argv[]) {
     char nextDataPacket[DATAPACKETSIZE];  
 
     while ( total_sent < strlen(payload) ) {
-
       int current_window_place = 0;
       while ( current_window_place < target_window && total_sent < strlen(payload) ) {
 
@@ -215,10 +214,7 @@ int main(int argc, char *argv[]) {
       }
 
       // Wait for ACK then continue sending next window
-      while (current_acknum < (total_sent- DATAPACKETSIZE) ) {
-        printf("current ack %d\n", current_acknum);
-        printf("total expt%d\n", total_sent);
-        printf("-------\n");
+      while (current_acknum < (total_sent - DATAPACKETSIZE) ) {
         if ((numbytes = recvfrom(sockfd, window, MAXBUFLEN-1 , 0,
             (struct sockaddr *)&recv_addr, &recv_len)) == -1) {
             perror("SEN: Error on recvfrom()!");
@@ -227,17 +223,12 @@ int main(int argc, char *argv[]) {
 
         p = parsePacket(window);
 
-        printf("last recieved ack %d\n", p.acknum);
-
         if ( p.type == ACK_TYPE ) {
           if ( p.acknum <= (current_acknum+DATAPACKETSIZE) ) {
             current_acknum = p.acknum;
           } else {
             // We lost a packet, resend from that point
             total_sent = current_acknum;
-
-            printf("resending from %d.\n", total_sent);
-
             break;
           }
           // TODO: We need a timeout here
@@ -258,8 +249,6 @@ int main(int argc, char *argv[]) {
 
     if ( p.type != ACK_TYPE ) {
       // Error here
-      printf(">>>>>>continue 1\n");
-
       continue;
     }
 
@@ -270,7 +259,19 @@ int main(int argc, char *argv[]) {
     }       
 
     p = parsePacket(window);
-    printPacket(p);
+
+    int last_packet = -1;
+    while (last_packet != FIN_TYPE) {
+      if ((numbytes = recvfrom(sockfd, window, MAXBUFLEN-1 , 0,
+          (struct sockaddr *)&recv_addr, &recv_len)) == -1) {
+          perror("SEN: Error on recvfrom()!");
+          return -1;
+      }       
+
+      p = parsePacket(window);
+      last_packet = p.type;
+    }
+
     if ( p.type == FIN_TYPE ) {
       // Connection closed
       buildRDPPacket(ACK_TYPE, total_sent, current_acknum, 0, sizeof(window), p.dest_ip, p.dest_port, p.src_ip, p.src_port, "", sockfd, recv_addr, recv_len);      
@@ -278,10 +279,8 @@ int main(int argc, char *argv[]) {
     } else {
       // Error here
 
-      printf(">>>>>>continue 2\n"); // XX error here for some reason not getting fin
       continue;
     }
-    printf(">>>>>>continue 4\n");
 
 
   }
@@ -303,7 +302,6 @@ void buildRDPPacket(int flag, int seqnum, int acknum, int payloadlength, int win
   }
 
   sprintf(packet, "%s%s\n\0", header, payload);
-  printf("%s\n", packet);
   sendPacket(sockfd, packet, addr, len);
 }
 
