@@ -19,10 +19,9 @@
 
 #define WINDOWSIZE 4096
 #define MAXPACKETSIZE 1024
-#define DATAPACKETSIZE 1000
+#define DATAPACKETSIZE 100 // TODO: Make this larger. XX Could cause errors
 #define MAXBUFLEN 256
 
-#define INIT_TYPE -1
 #define DAT_TYPE 0
 #define ACK_TYPE 1
 #define SYN_TYPE 2
@@ -169,23 +168,15 @@ int main(int argc, char *argv[]) {
   // We are now connected and serving
   printf("rdps is running on RDP port %i.\n", portno);
 
-  int initial_seqnum = 0;
-  int initial_acknum = 0;
-
-  // int counterz = 0;
-  // while ( counterz < strlen(payload) ) {
-  //   printf("current >> %d\n", counterz);
-  //   printf( "%.100s", &payload[ counterz ] );
-  //   printf("\n");
-  //   counterz = counterz + 100;
-  // }
+  int current_seqnum = 0;
+  int current_acknum = 0;
 
   // Running loop
   while ( 1 ) {
     struct packet p;    
 
     // Initialize protocol
-    buildRDPPacket(SYN_TYPE, initial_seqnum, initial_acknum, 0, 0, dest_address, dest_portno, address, portno, "", sockfd, recv_addr, recv_len);    
+    buildRDPPacket(SYN_TYPE, current_seqnum, current_acknum, 0, 0, dest_address, dest_portno, address, portno, "", sockfd, recv_addr, recv_len);    
 
     // SYN Handshake completion
     while( 1 ) {
@@ -205,19 +196,29 @@ int main(int argc, char *argv[]) {
     }
 
     // Begin sending data
-    while ( 1 ) {
-      int counterz = 0;
-      char nextDataPacket[DATAPACKETSIZE];  
-      while ( counterz < strlen(payload) ) {
-      // while ( 1 ) {
-        // XXX Start sending data within window size, then wait for ACK from other side
-        // Once ACK recieved means other side's window is cleared and written to file, start sending again
+    int target_window = p.window;
+    int total_sent = 0;
+    char nextDataPacket[DATAPACKETSIZE];  
+
+    while ( total_sent < strlen(payload) ) {
+
+      int current_window_place = 0;
+      while ( current_window_place < target_window && total_sent < strlen(payload) ) {
 
         // Send DATA Packet
-        sprintf(nextDataPacket, "%.100s\0", &payload[ counterz ]);
-        buildRDPPacket(DAT_TYPE, p.acknum, (p.seqnum+1), sizeof(nextDataPacket), sizeof(window), p.dest_ip, p.dest_port, p.src_ip, p.src_port, nextDataPacket, sockfd, recv_addr, recv_len);
-        
-        // Wait for ACK
+        sprintf(nextDataPacket, "%.100s\0", &payload[ total_sent ]);
+
+        buildRDPPacket(DAT_TYPE, total_sent, current_acknum, sizeof(nextDataPacket), sizeof(window), p.dest_ip, p.dest_port, p.src_ip, p.src_port, nextDataPacket, sockfd, recv_addr, recv_len);
+
+        current_window_place = current_window_place + MAXPACKETSIZE;
+        total_sent = total_sent + strlen(nextDataPacket);
+      }
+
+      // Wait for ACK then continue sending next window
+      while (current_acknum < (total_sent- DATAPACKETSIZE) ) {
+        printf("current ack %d\n", current_acknum);
+        printf("total expt%d\n", total_sent);
+        printf("-------\n");
         if ((numbytes = recvfrom(sockfd, window, MAXBUFLEN-1 , 0,
             (struct sockaddr *)&recv_addr, &recv_len)) == -1) {
             perror("SEN: Error on recvfrom()!");
@@ -226,18 +227,62 @@ int main(int argc, char *argv[]) {
 
         p = parsePacket(window);
 
-        if ( p.type != ACK_TYPE ) {
-          perror("SEN: Failed to recieve correct ACK!");
-          break;
-        }
+        printf("last recieved ack %d\n", p.acknum);
 
-        counterz = counterz + 100; 
+        if ( p.type == ACK_TYPE ) {
+          if ( p.acknum <= (current_acknum+DATAPACKETSIZE) ) {
+            current_acknum = p.acknum;
+          } else {
+            // We lost a packet, resend from that point
+            total_sent = current_acknum;
+
+            printf("resending from %d.\n", total_sent);
+
+            break;
+          }
+          // TODO: We need a timeout here
+        }
       }
-      
     }
 
-    // TODO: implement better
-    buildRDPPacket(FIN_TYPE, 0, 0, 0, 0, " ", 0, " ", 0, " ", sockfd, recv_addr, recv_len);
+    // Closing handshake
+    buildRDPPacket(FIN_TYPE, total_sent, current_acknum, 0, sizeof(window), p.dest_ip, p.dest_port, p.src_ip, p.src_port, "", sockfd, recv_addr, recv_len);
+
+    if ((numbytes = recvfrom(sockfd, window, MAXBUFLEN-1 , 0,
+        (struct sockaddr *)&recv_addr, &recv_len)) == -1) {
+        perror("SEN: Error on recvfrom()!");
+        return -1;
+    }      
+
+    p = parsePacket(window);
+
+    if ( p.type != ACK_TYPE ) {
+      // Error here
+      printf(">>>>>>continue 1\n");
+
+      continue;
+    }
+
+    if ((numbytes = recvfrom(sockfd, window, MAXBUFLEN-1 , 0,
+        (struct sockaddr *)&recv_addr, &recv_len)) == -1) {
+        perror("SEN: Error on recvfrom()!");
+        return -1;
+    }       
+
+    p = parsePacket(window);
+    printPacket(p);
+    if ( p.type == FIN_TYPE ) {
+      // Connection closed
+      buildRDPPacket(ACK_TYPE, total_sent, current_acknum, 0, sizeof(window), p.dest_ip, p.dest_port, p.src_ip, p.src_port, "", sockfd, recv_addr, recv_len);      
+      break;      
+    } else {
+      // Error here
+
+      printf(">>>>>>continue 2\n"); // XX error here for some reason not getting fin
+      continue;
+    }
+    printf(">>>>>>continue 4\n");
+
 
   }
  
@@ -512,3 +557,8 @@ void printPacket(struct packet p) {
   /*
   If you're having problems with sizes its likley because oif using strlen and size of interchangably which will yeild different results
   */
+
+  // if ( p.type != ACK_TYPE ) {
+  //   perror("SEN: Failed to recieve correct ACK!");
+  //   break;
+  // }

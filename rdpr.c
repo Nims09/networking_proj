@@ -19,7 +19,7 @@
 
 #define WINDOWSIZE 4096
 #define MAXPACKETSIZE 1024
-#define DATAPACKETSIZE 1000
+#define DATAPACKETSIZE 100 // TODO: Make this larger. XX Could cause errors
 #define MAXBUFLEN 256
 
 #define INIT_TYPE -1
@@ -146,6 +146,9 @@ int main(int argc, char *argv[]) {
   // We are now connected and serving
   printf("rdpr is running on RDP port %i.\n", portno);
 
+  int window_size = sizeof(window);
+  printf("WIN SIZE: %d\n", window_size);
+
   // Running loop
   while ( 1 ) {
     struct packet p;
@@ -153,16 +156,16 @@ int main(int argc, char *argv[]) {
     // SYN Handshake
     while ( 1 ) {
 
-      if ((numbytes = recvfrom(sockfd, buffer, MAXBUFLEN-1 , 0,
+      if ((numbytes = recvfrom(sockfd, window, MAXBUFLEN-1 , 0,
           (struct sockaddr *)&sender_addr, &sender_len)) == -1) {
           perror("REC: error on recvfrom()!");
           return -1;
       }
 
-      p = parsePacket(buffer);
+      p = parsePacket(window);
 
       if ( p.type == SYN_TYPE ) {
-        buildRDPPacket(SYN_TYPE, p.acknum, (p.seqnum+1), 0, sizeof(window), address, portno, p.src_ip, p.src_port, "", sockfd, sender_addr, sender_len);
+        buildRDPPacket(SYN_TYPE, p.acknum, (p.seqnum+1), 0, window_size, address, portno, p.src_ip, p.src_port, "", sockfd, sender_addr, sender_len);
         break;
       } else {
         continue;
@@ -170,26 +173,55 @@ int main(int argc, char *argv[]) {
     }
 
     // Begin accepting data
+    int current_seqnum = 0;
+    int total_recieved = 0;
     while ( 1 ) {
-      if ((numbytes = recvfrom(sockfd, buffer, MAXBUFLEN-1 , 0,
+      if ((numbytes = recvfrom(sockfd, window, MAXBUFLEN-1 , 0,
           (struct sockaddr *)&sender_addr, &sender_len)) == -1) {
           perror("REC: error on recvfrom()!");
           return -1;
       }
-      p = parsePacket(buffer);
 
-      buildRDPPacket(ACK_TYPE, p.acknum, (p.seqnum+1), 0, 0, p.dest_ip, p.dest_port, p.src_ip, p.src_port, "", sockfd, sender_addr, sender_len);
+      p = parsePacket(window);
+      
+      printf("rec seq: %d\n", p.seqnum);
+      printf("total rec: %d\n", total_recieved);
+      if ( p.seqnum > total_recieved) {
+        // We're getting duplicate packets don't write.
+        printf("%s", p.data);
+        fprintf(write_file, "%s", p.data);
+        total_recieved = p.seqnum;
+      }
 
-      // printPacket(p);
-      printf("%s", p.data);
-      fprintf(write_file, "%s", p.data);
+      printf("sending ack for %d\n", p.seqnum);
 
-      // TODO Better implement this
+      buildRDPPacket(ACK_TYPE, current_seqnum, p.seqnum, 0, window_size, p.dest_ip, p.dest_port, p.src_ip, p.src_port, "", sockfd, sender_addr, sender_len);
+      current_seqnum++;
+
+      // Finished transfering, closing handshake
       if ( p.type == FIN_TYPE ) {
-        break;
+        buildRDPPacket(ACK_TYPE, current_seqnum, p.seqnum, 0, window_size, p.dest_ip, p.dest_port, p.src_ip, p.src_port, "", sockfd, sender_addr, sender_len);        
+        buildRDPPacket(FIN_TYPE, current_seqnum, p.seqnum, 0, window_size, p.dest_ip, p.dest_port, p.src_ip, p.src_port, "", sockfd, sender_addr, sender_len); 
+
+        if ((numbytes = recvfrom(sockfd, window, MAXBUFLEN-1 , 0,
+            (struct sockaddr *)&sender_addr, &sender_len)) == -1) {
+            perror("REC: error on recvfrom()!");
+            return -1;
+        }
+
+        p = parsePacket(window);
+
+        // TODO: This should check ack numbers to make sure its the correct value, same should go on the senders end too.
+        if ( p.type == ACK_TYPE ) {
+          break;
+        } else {
+          // Error here
+          continue;
+        }
       }
     }
-    fclose(write_file); // TODO: Move me to the end // XXX
+
+    fclose(write_file); 
     break;
 
   }
@@ -202,7 +234,7 @@ void buildRDPPacket(int flag, int seqnum, int acknum, int payloadlength, int win
   static char packet[MAXPACKETSIZE];
   char* header = NULL;
 
-  header = buildRDPHeader(flag, 0, 0, 0, 0, destip, destportno, srcip, srcportno);    
+  header = buildRDPHeader(flag, seqnum, acknum, payloadlength, winsize, destip, destportno, srcip, srcportno);    
 
   if ( flag != DAT_TYPE ) {
     payload = "";
@@ -214,7 +246,6 @@ void buildRDPPacket(int flag, int seqnum, int acknum, int payloadlength, int win
 
 
 char* buildRDPHeader(int type, int seqnum, int acknum, int payloadlength, int winsize, char* destip, int destportno, char*srcip, int srcportno) {
-
   static char header[MAXBUFLEN];
   char *typeString = NULL;
 
