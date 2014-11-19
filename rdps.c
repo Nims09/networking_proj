@@ -28,6 +28,11 @@
 #define FIN_TYPE 3
 #define RST_TYPE 4
 
+#define LOG_FLAG_S_PACKET_INITIAL 0
+#define LOG_FLAG_S_PACKET_RESEND 1
+#define LOG_FLAG_R_PACKET_INITIAL 2
+#define LOG_FLAG_R_PACKET_RESEND 3
+
 #define MAG_FIELD 0
 #define TYP_FIELD 1
 #define SEQ_FIELD 2
@@ -69,6 +74,9 @@ struct sockaddr_in setAddressAndPortNo(char *addr, int portno);
 
 // Send a string to the client
 int sendPacket(int sockfd, char *packet, struct sockaddr_in addr, socklen_t len);
+
+// Writes a log message
+void writeServerLog(int flag, char* src_ip, int src_port, char* dst_ip, int dst_port, int packet_type, int seq_or_ack, int window_or_length); 
 
 // Confirm the file exists
 int checkFilePath(char *loc);
@@ -171,6 +179,27 @@ int main(int argc, char *argv[]) {
   int current_seqnum = 0;
   int current_acknum = 0;
 
+
+// 100 total data bytes sent: 1165152
+// 101 unique data bytes sent: 1048576
+// 102 total data packets sent: 1166
+// 103 unique data packets sent: 1049
+// 104 SYN packets sent: 1
+// 105 FIN packets sent: 1
+// 106 RST packets sent: 0
+// 107 ACK packets received: 1051
+// 108 RST packets received: 0
+// 109 total time duration (second): 0.093
+
+  int total_bytes_sent = 0;
+  int unique__bytes_sent = 0;
+  int total_data_packets_sent = 0;
+  int total_unique_data_packets_sent = 0;
+  int syn_count = 0;
+  int fin_sent = 0;
+  int rst_sent = 0;
+  int total_time = 0;
+
   // Running loop
   while ( 1 ) {
     struct packet p;    
@@ -201,6 +230,7 @@ int main(int argc, char *argv[]) {
     char nextDataPacket[DATAPACKETSIZE];  
 
     while ( total_sent < strlen(payload) ) {
+
       int current_window_place = 0;
       while ( current_window_place < target_window && total_sent < strlen(payload) ) {
 
@@ -427,6 +457,67 @@ int sendPacket(int sockfd, char *packet, struct sockaddr_in addr, socklen_t len)
         return -1;
     }   
     return 1;
+}
+// XXX for refrence 
+// HH:MM:SS.us event_type sip:spt dip:dpt packet_type seqno/ackno length/window
+
+// HH:MM:SS.us: represents the time instance in Hour:Minute:Second.microsecond format sending or receiving a packet, e.g., 23:59:59.999999 means 1 microsecond before midnight.
+// event type: represents the type of events, i.e.,
+// – s: send a packet for the first time – S: resend the packet
+// – r: receive a packet
+// – R: receive the same packet again
+
+void writeServerLog(int flag, char* src_ip, int src_port, char* dst_ip, int dst_port, int packet_type, int seq_or_ack, int window_or_length) {
+
+  // Get the time
+  char dateString[100];
+  time_t now = time(NULL);
+  struct tm *t = localtime(&now);
+  strftime(dateString, sizeof(dateString)-1, "%b %d %H:%M:%S.%us", t);
+
+  char* flag_val;
+  char* packet_type_val;
+
+  switch ( packet_type ) {
+    case DAT_TYPE:
+      packet_type_val = "DAT";
+      break;
+    case ACK_TYPE:
+      packet_type_val = "ACK";
+      break;
+    case SYN_TYPE:
+      packet_type_val = "SYN";
+      break;
+    case FIN_TYPE:
+      packet_type_val = "FIN";
+      break;
+    case RST_TYPE:
+      packet_type_val = "RST";
+      break;
+    default:
+      packet_type_val = "   ";
+      break;
+  }
+
+  switch ( flag ) {
+    case LOG_FLAG_S_PACKET_INITIAL:
+      flag_val = "s";
+      break;
+    case LOG_FLAG_S_PACKET_RESEND:
+      flag_val = "S";
+      break;
+    case LOG_FLAG_R_PACKET_INITIAL:
+      flag_val = "r";
+      break;
+    case LOG_FLAG_R_PACKET_RESEND:
+      flag_val = "R";
+      break;                  
+    default:
+      flag_val = " ";
+      break;
+  }
+
+  printf("%s %s %s:%d %s:%d %s %d %d\n", dateString, flag_val, src_ip, src_port, dst_ip, dst_port, packet_type_val, seq_or_ack, window_or_length);
 }
 
 int checkFilePath(char *loc) {

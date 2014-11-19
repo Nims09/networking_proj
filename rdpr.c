@@ -29,6 +29,11 @@
 #define FIN_TYPE 3
 #define RST_TYPE 4
 
+#define LOG_FLAG_S_PACKET_INITIAL 0
+#define LOG_FLAG_S_PACKET_RESEND 1
+#define LOG_FLAG_R_PACKET_INITIAL 2
+#define LOG_FLAG_R_PACKET_RESEND 3
+
 #define MAG_FIELD 0
 #define TYP_FIELD 1
 #define SEQ_FIELD 2
@@ -70,6 +75,9 @@ struct sockaddr_in setAddressAndPortNo(char *addr, int portno);
 
 // Send a string to the client
 int sendPacket(int sockfd, char *buffer, struct sockaddr_in addr, socklen_t len);
+
+// Writes a log message
+void writeServerLog(int flag, char* src_ip, int src_port, char* dst_ip, int dst_port, int packet_type, int seq_or_ack, int window_or_length); 
 
 // Confirm the file exists
 int checkFilePath(char *loc);
@@ -356,6 +364,60 @@ int sendPacket(int sockfd, char *buffer, struct sockaddr_in addr, socklen_t len)
         return -1;
     }   
     return 1;
+}
+
+
+void writeServerLog(int flag, char* src_ip, int src_port, char* dst_ip, int dst_port, int packet_type, int seq_or_ack, int window_or_length) {
+
+  // Get the time
+  char dateString[100];
+  time_t now = time(NULL);
+  struct tm *t = localtime(&now);
+  strftime(dateString, sizeof(dateString)-1, "%b %d %H:%M:%S.%us", t);
+
+  char* flag_val;
+  char* packet_type_val;
+
+  switch ( packet_type ) {
+    case DAT_TYPE:
+      packet_type_val = "DAT";
+      break;
+    case ACK_TYPE:
+      packet_type_val = "ACK";
+      break;
+    case SYN_TYPE:
+      packet_type_val = "SYN";
+      break;
+    case FIN_TYPE:
+      packet_type_val = "FIN";
+      break;
+    case RST_TYPE:
+      packet_type_val = "RST";
+      break;
+    default:
+      packet_type_val = "   ";
+      break;
+  }
+
+  switch ( flag ) {
+    case LOG_FLAG_S_PACKET_INITIAL:
+      flag_val = "s";
+      break;
+    case LOG_FLAG_S_PACKET_RESEND:
+      flag_val = "S";
+      break;
+    case LOG_FLAG_R_PACKET_INITIAL:
+      flag_val = "r";
+      break;
+    case LOG_FLAG_R_PACKET_RESEND:
+      flag_val = "R";
+      break;                  
+    default:
+      flag_val = " ";
+      break;
+  }
+
+  printf("%s %s %s:%d %s:%d %s %d %d\n", dateString, flag_val, src_ip, src_port, dst_ip, dst_port, packet_type_val, seq_or_ack, window_or_length);
 }
 
 int checkFilePath(char *loc) {
