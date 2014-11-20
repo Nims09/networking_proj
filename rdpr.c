@@ -48,6 +48,8 @@
 
 #define PROTOCOL_TOKEN "UVicCSc361"
 
+#define PACKET_TIMEOUT 5
+
 struct packet {
   int type;
   int seqnum;
@@ -144,7 +146,7 @@ int main(int argc, char *argv[]) {
   recv_addr = setAddressAndPortNo(address, portno);
 
   if ( setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval)) == -1 ) {
-    fprintf(stderr, "SEN: Error error on setsockopt()\n" );    
+    fprintf(stderr, "REC: Error error on setsockopt()\n" );    
   }
 
   if ( bind(sockfd, (struct sockaddr *) &recv_addr, sizeof(recv_addr)) < 0) {
@@ -182,7 +184,6 @@ int main(int argc, char *argv[]) {
     
     // SYN Handshake
     while ( 1 ) {
-
       if ((numbytes = recvfrom(sockfd, window, MAXBUFLEN-1 , 0,
           (struct sockaddr *)&sender_addr, &sender_len)) == -1) {
           perror("REC: error on recvfrom()!");
@@ -255,7 +256,7 @@ int main(int argc, char *argv[]) {
   time_t time_final = time(NULL);
 
   tracker.final_time = time_final - time_initial;
-  
+
   printTracker(tracker);
 
   return -1;

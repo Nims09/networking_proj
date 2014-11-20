@@ -47,6 +47,8 @@
 
 #define PROTOCOL_TOKEN "UVicCSc361"
 
+#define PACKET_TIMEOUT 1
+
 struct packet {
   int type;
   int seqnum;
@@ -145,6 +147,14 @@ int main(int argc, char *argv[]) {
   recv_addr = setAddressAndPortNo(dest_address, dest_portno);
   sender_addr = setAddressAndPortNo(address, portno);
 
+  // set Timeout
+  struct timeval tv;
+  tv.tv_sec = 0;
+  tv.tv_sec = PACKET_TIMEOUT;
+  if ( setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0 ) {
+      perror("SEN: Error setting timeout\n");
+  }
+
   // set SO_REUSEADDR on a socket to true (1):
   if ( setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval)) == -1 ) {
     fprintf(stderr, "SEN: Error error on setsockopt()\n" );    
@@ -198,25 +208,32 @@ int main(int argc, char *argv[]) {
   int current_seqnum = 0;
   int current_acknum = 0;
 
+  // TODO - these start as their initial value, for each packet needing to resend their are incremented
+  int is_send_resend = LOG_FLAG_S_PACKET_INITIAL;
+  int is_recv_resend = LOG_FLAG_R_PACKET_INITIAL;
+
   // Create tracker and check initial time
   struct log_tracker tracker; 
+  struct packet p;    
 
   // Get the time
   time_t time_initial = time(NULL);
 
   // Running loop
   while ( 1 ) {
-    struct packet p;    
-
-    // Initialize protocol
-    tracker = buildRDPPacket(SYN_TYPE, current_seqnum, current_acknum, 0, 0, dest_address, dest_portno, address, portno, "", sockfd, recv_addr, recv_len, LOG_FLAG_S_PACKET_INITIAL, tracker); 
-
     // SYN Handshake completion
     while( 1 ) {
+      // Initialize protocol
+      // TODO: some times infinite loops sending SYNs
+      tracker = buildRDPPacket(SYN_TYPE, current_seqnum, current_acknum, 0, 0, dest_address, dest_portno, address, portno, "", sockfd, recv_addr, recv_len, is_send_resend, tracker);
+      if ( is_send_resend > LOG_FLAG_S_PACKET_INITIAL ) {
+        is_send_resend--;
+      }
+
       if ((numbytes = recvfrom(sockfd, window, MAXBUFLEN-1 , 0,
           (struct sockaddr *)&recv_addr, &recv_len)) == -1) {
-          perror("SEN: Error on recvfrom()!");
-          return -1;
+        is_send_resend++;
+        continue;
       }
 
       p = parsePacket(window, LOG_FLAG_R_PACKET_INITIAL);
@@ -227,6 +244,7 @@ int main(int argc, char *argv[]) {
       } else {
         continue;
       }
+ 
     }
 
     // Begin sending data
@@ -235,14 +253,20 @@ int main(int argc, char *argv[]) {
     char nextDataPacket[DATAPACKETSIZE];  
 
     while ( total_sent < strlen(payload) ) {
-
       int current_window_place = 0;
+
       while ( current_window_place < target_window && total_sent < strlen(payload) ) {
 
         // Send DATA Packet
         sprintf(nextDataPacket, "%.100s\0", &payload[ total_sent ]);
 
-        tracker = buildRDPPacket(DAT_TYPE, total_sent, current_acknum, sizeof(nextDataPacket), sizeof(window), p.dest_ip, p.dest_port, p.src_ip, p.src_port, nextDataPacket, sockfd, recv_addr, recv_len, LOG_FLAG_S_PACKET_INITIAL, tracker);
+        tracker = buildRDPPacket(DAT_TYPE, total_sent, current_acknum, sizeof(nextDataPacket), sizeof(window), p.dest_ip, p.dest_port, p.src_ip, p.src_port, nextDataPacket, sockfd, recv_addr, recv_len, is_send_resend, tracker);
+
+        // TODO this is not working correctly
+        // If resend count is above initial decrement
+        if ( is_send_resend > LOG_FLAG_S_PACKET_INITIAL ) {
+          is_send_resend--;
+        }
 
         current_window_place = current_window_place + MAXPACKETSIZE;
         total_sent = total_sent + strlen(nextDataPacket);
@@ -252,8 +276,9 @@ int main(int argc, char *argv[]) {
       while (current_acknum < (total_sent - DATAPACKETSIZE) ) {
         if ((numbytes = recvfrom(sockfd, window, MAXBUFLEN-1 , 0,
             (struct sockaddr *)&recv_addr, &recv_len)) == -1) {
-            perror("SEN: Error on recvfrom()!");
-            return -1;
+          total_sent = current_acknum;
+          is_send_resend += ( ( total_sent-current_acknum ) / DATAPACKETSIZE );
+          return -1;
         }      
 
         p = parsePacket(window, LOG_FLAG_R_PACKET_INITIAL);
@@ -264,6 +289,7 @@ int main(int argc, char *argv[]) {
             current_acknum = p.acknum;
           } else {
             // We lost a packet, resend from that point
+            is_send_resend += ( ( total_sent-current_acknum ) / DATAPACKETSIZE );
             total_sent = current_acknum;
             break;
           }
@@ -328,7 +354,7 @@ int main(int argc, char *argv[]) {
   printTracker(tracker);
  
   free(payload);
-  
+
 	return -1;
 }
 
@@ -530,22 +556,17 @@ void writeServerLog(int flag, char* src_ip, int src_port, char* dst_ip, int dst_
       break;
   }
 
-  switch ( flag ) {
-    case LOG_FLAG_S_PACKET_INITIAL:
-      flag_val = "s";
-      break;
-    case LOG_FLAG_S_PACKET_RESEND:
-      flag_val = "S";
-      break;
-    case LOG_FLAG_R_PACKET_INITIAL:
-      flag_val = "r";
-      break;
-    case LOG_FLAG_R_PACKET_RESEND:
-      flag_val = "R";
-      break;                  
-    default:
-      flag_val = " ";
-      break;
+  // TODO check if we are getting blank values a miscount is happening
+  if ( flag == LOG_FLAG_S_PACKET_INITIAL ) {
+    flag_val = "s";
+  } else if ( flag > LOG_FLAG_S_PACKET_INITIAL && flag != LOG_FLAG_R_PACKET_INITIAL) {
+    flag_val = "S";
+  } else if ( flag == LOG_FLAG_R_PACKET_INITIAL ) {
+    flag_val = "r";
+  } else if ( flag > LOG_FLAG_R_PACKET_INITIAL ) {
+    flag_val = "R";
+  } else {
+    flag_val = " ";
   }
 
   printf("%s %s %s:%d %s:%d %s %d %d\n", dateString, flag_val, src_ip, src_port, dst_ip, dst_port, packet_type_val, seq_or_ack, window_or_length);
