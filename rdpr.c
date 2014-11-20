@@ -61,14 +61,28 @@ struct packet {
   int src_port;
 };
 
+struct log_tracker {
+  int total_bytes_recv;
+  int unique_bytes_recv;
+  int total_data_packets_recv;
+  int total_unique_data_packets_recv;
+  int syn_recv;
+  int fin_recv;
+  int rst_recv;
+  int ack_sent;
+  int rst_sent;
+  int final_time;
+};
+
+
 // Builds a packet to be sent over the wire
 char* buildRDPHeader(int type, int seqnum, int acknum, int payloadlength, int winsize, char* destip, int destportno, char*srcip, int srcportno);
 
 // Builds a packet based on a previous packet
-void buildRDPPacket(int flag, int seqnum, int acknum, int payloadlength, int winsize, char* destip, int destportno, char*srcip, int srcportno, char *payload, int sockfd, struct sockaddr_in addr, socklen_t len);
+struct log_tracker buildRDPPacket(int previous_flag, int seqnum, int acknum, int payloadlength, int winsize, char* destip, int destportno, char*srcip, int srcportno, char *payload, int sockfd, struct sockaddr_in addr, socklen_t len, int packet_initial_flag, struct log_tracker tracker);
 
 // Parses a string packet into a struct
-struct packet parsePacket(char* packet);
+struct packet parsePacket(char* packet, int packet_initial_flag);
 
 // Set portNo on an addr
 struct sockaddr_in setAddressAndPortNo(char *addr, int portno);
@@ -88,10 +102,16 @@ int strToInt(char *string);
 // Prints a packet to STD out
 void printPacket(struct  packet p);
 
+// Add recieving info to the tracker 
+struct log_tracker addRecvDataToTracker(struct packet p, int packet_initial_flag, struct log_tracker t);
+
+// Print the tracker
+void printTracker(struct log_tracker t);
+
 int main(int argc, char *argv[]) {
-	int sockfd;
-	int portno;
-	char *address;
+  int sockfd;
+  int portno;
+  char *address;
   char *file_path;  
   int numbytes;
   struct sockaddr_in recv_addr, sender_addr;
@@ -101,7 +121,7 @@ int main(int argc, char *argv[]) {
   char window[WINDOWSIZE];
   int optval = 1;
 
-	// Confirm command line args
+  // Confirm command line args
   if ( argc != 4 ) {
       printf( "Usage: %s <ip> <port> <file>\n", argv[0] );
       fprintf(stderr,"REC:ERROR: Incorrect input.\n");
@@ -110,8 +130,8 @@ int main(int argc, char *argv[]) {
 
   // Create the UDP socket
   if ( (sockfd = socket(AF_INET, SOCK_DGRAM, 0)) == -1 ) {
-  	fprintf(stderr, "REC:ERROR: error on socket()\n");
-  	return -1;
+    fprintf(stderr, "REC:ERROR: error on socket()\n");
+    return -1;
   }
 
   // Parse the params
@@ -128,9 +148,9 @@ int main(int argc, char *argv[]) {
   }
 
   if ( bind(sockfd, (struct sockaddr *) &recv_addr, sizeof(recv_addr)) < 0) {
-  	close(sockfd);
-  	fprintf(stderr, "REC: Error on error on bind()\n" );
-  	return -1;
+    close(sockfd);
+    fprintf(stderr, "REC: Error on error on bind()\n" );
+    return -1;
   }
   sender_len = sizeof(sender_addr);
 
@@ -151,9 +171,14 @@ int main(int argc, char *argv[]) {
 
   int window_size = sizeof(window);
 
+  struct packet p;
+  struct log_tracker tracker;
+
+  // Get the time
+  time_t time_initial = time(NULL);
+  
   // Running loop
   while ( 1 ) {
-    struct packet p;
     
     // SYN Handshake
     while ( 1 ) {
@@ -164,10 +189,10 @@ int main(int argc, char *argv[]) {
           return -1;
       }
 
-      p = parsePacket(window);
+      p = parsePacket(window, LOG_FLAG_R_PACKET_INITIAL);
 
       if ( p.type == SYN_TYPE ) {
-        buildRDPPacket(SYN_TYPE, p.acknum, (p.seqnum+1), 0, window_size, address, portno, p.src_ip, p.src_port, "", sockfd, sender_addr, sender_len);
+        buildRDPPacket(SYN_TYPE, p.acknum, (p.seqnum+1), 0, window_size, address, portno, p.src_ip, p.src_port, "", sockfd, sender_addr, sender_len, LOG_FLAG_S_PACKET_INITIAL, tracker);
         break;
       } else {
         continue;
@@ -184,7 +209,8 @@ int main(int argc, char *argv[]) {
           return -1;
       }
 
-      p = parsePacket(window);
+      p = parsePacket(window, LOG_FLAG_R_PACKET_INITIAL);
+      tracker = addRecvDataToTracker(p, LOG_FLAG_R_PACKET_INITIAL, tracker);
       
       if ( p.seqnum > total_recieved) {
         // We're getting duplicate packets don't write.
@@ -192,14 +218,14 @@ int main(int argc, char *argv[]) {
         total_recieved = p.seqnum;
       }
 
-      buildRDPPacket(ACK_TYPE, current_seqnum, p.seqnum, 0, window_size, p.dest_ip, p.dest_port, p.src_ip, p.src_port, "", sockfd, sender_addr, sender_len);
+      buildRDPPacket(ACK_TYPE, current_seqnum, p.seqnum, 0, window_size, p.dest_ip, p.dest_port, p.src_ip, p.src_port, "", sockfd, sender_addr, sender_len, LOG_FLAG_S_PACKET_INITIAL, tracker);
       current_seqnum++;
 
       // Finished transfering, closing handshake
       if ( p.type == FIN_TYPE ) {
-        buildRDPPacket(ACK_TYPE, current_seqnum, p.seqnum, 0, window_size, p.dest_ip, p.dest_port, p.src_ip, p.src_port, "", sockfd, sender_addr, sender_len);  
+        buildRDPPacket(ACK_TYPE, current_seqnum, p.seqnum, 0, window_size, p.dest_ip, p.dest_port, p.src_ip, p.src_port, "", sockfd, sender_addr, sender_len, LOG_FLAG_S_PACKET_INITIAL, tracker);  
 
-        buildRDPPacket(FIN_TYPE, current_seqnum, p.seqnum, 0, window_size, p.dest_ip, p.dest_port, p.src_ip, p.src_port, "", sockfd, sender_addr, sender_len); 
+        buildRDPPacket(FIN_TYPE, current_seqnum, p.seqnum, 0, window_size, p.dest_ip, p.dest_port, p.src_ip, p.src_port, "", sockfd, sender_addr, sender_len, LOG_FLAG_S_PACKET_INITIAL, tracker); 
 
         if ((numbytes = recvfrom(sockfd, window, MAXBUFLEN-1 , 0,
             (struct sockaddr *)&sender_addr, &sender_len)) == -1) {
@@ -207,7 +233,9 @@ int main(int argc, char *argv[]) {
             return -1;
         }
 
-        p = parsePacket(window);
+        p = parsePacket(window, LOG_FLAG_R_PACKET_INITIAL);
+        tracker = addRecvDataToTracker(p, LOG_FLAG_R_PACKET_INITIAL, tracker);
+
 
         // TODO: This should check ack numbers to make sure its the correct value, same should go on the senders end too.
         if ( p.type == ACK_TYPE ) {
@@ -224,10 +252,16 @@ int main(int argc, char *argv[]) {
 
   }
 
-	return -1;
+  time_t time_final = time(NULL);
+
+  tracker.final_time = time_final - time_initial;
+  
+  printTracker(tracker);
+
+  return -1;
 }
 
-void buildRDPPacket(int flag, int seqnum, int acknum, int payloadlength, int winsize, char* destip, int destportno, char*srcip, int srcportno, char *payload, int sockfd, struct sockaddr_in addr, socklen_t len) {
+struct log_tracker buildRDPPacket(int flag, int seqnum, int acknum, int payloadlength, int winsize, char* destip, int destportno, char* srcip, int srcportno, char *payload, int sockfd, struct sockaddr_in addr, socklen_t len, int packet_initial_flag, struct log_tracker tracker) {
   int type = -1; 
   static char packet[MAXPACKETSIZE];
   char* header = NULL;
@@ -240,8 +274,22 @@ void buildRDPPacket(int flag, int seqnum, int acknum, int payloadlength, int win
 
   sprintf(packet, "%s%s\n\0", header, payload);
   sendPacket(sockfd, packet, addr, len);
-}
 
+  writeServerLog(packet_initial_flag, srcip, srcportno, destip, destportno, flag, seqnum, payloadlength);  
+
+  switch ( flag ) {
+    case ACK_TYPE:
+      tracker.ack_sent++;
+      break;
+    case RST_TYPE:
+      tracker.rst_sent++;
+      break;
+    default:
+      break;
+  }
+
+  return tracker;  
+}
 
 char* buildRDPHeader(int type, int seqnum, int acknum, int payloadlength, int winsize, char* destip, int destportno, char*srcip, int srcportno) {
   static char header[MAXBUFLEN];
@@ -274,7 +322,7 @@ char* buildRDPHeader(int type, int seqnum, int acknum, int payloadlength, int wi
   return finishedHeader;
 }
 
-struct packet parsePacket(char* packet) {
+struct packet parsePacket(char* packet, int packet_initial_flag) {
   int currentToken = 0;
   struct packet p;
 
@@ -345,6 +393,8 @@ struct packet parsePacket(char* packet) {
     p.data = "";
   }
 
+  writeServerLog(packet_initial_flag, p.src_ip, p.src_port, p.dest_ip, p.dest_port, p.type, p.acknum, p.window);  
+
   return p;
 }
 
@@ -367,13 +417,14 @@ int sendPacket(int sockfd, char *buffer, struct sockaddr_in addr, socklen_t len)
 }
 
 
+
 void writeServerLog(int flag, char* src_ip, int src_port, char* dst_ip, int dst_port, int packet_type, int seq_or_ack, int window_or_length) {
 
   // Get the time
   char dateString[100];
   time_t now = time(NULL);
   struct tm *t = localtime(&now);
-  strftime(dateString, sizeof(dateString)-1, "%b %d %H:%M:%S.%us", t);
+  strftime(dateString, sizeof(dateString)-1, "%H:%M:%S.%us", t);
 
   char* flag_val;
   char* packet_type_val;
@@ -431,4 +482,46 @@ int strToInt(char *string) {
 
 void printPacket(struct packet p) {
   printf("Packet: \n\t  type: %d      \n\t seqnum: %d    \n\t acknum: %d    \n\t payload: %d   \n\t window: %d    \n\t data: %s      \n\t dest_ip: %s   \n\t dest_port: %d \n\t src_ip: %s    \n\t src_port: %d  \n\t \n", p.type, p.seqnum, p.acknum, p.payload, p.window, p.data, p.dest_ip, p.dest_port, p.src_ip, p.src_port);
+}
+
+struct log_tracker addRecvDataToTracker(struct packet p, int packet_initial_flag, struct log_tracker t) {
+
+  switch ( p.type ) {
+    case DAT_TYPE:
+      if ( packet_initial_flag == LOG_FLAG_R_PACKET_INITIAL ) {
+        t.unique_bytes_recv += strlen(p.data);
+        t.total_unique_data_packets_recv++;
+      }
+      t.total_bytes_recv += strlen(p.data);
+      t.total_data_packets_recv++;    
+      break;
+    case SYN_TYPE:
+      t.syn_recv++;
+      break;
+    case FIN_TYPE:
+      t.fin_recv++;
+      break;
+    case RST_TYPE:
+      t.rst_recv++;
+      break;
+    default:
+      break;
+  }
+
+  return t;
+}
+
+// http://stackoverflow.com/questions/16275444/c-how-to-print-time-difference-in-accuracy-of-milliseconds-and-nanoseconds XXX
+void printTracker(struct log_tracker t) {
+
+  printf("total data bytes recieved: %d\n", t.total_bytes_recv);
+  printf("unique data bytes recieved: %d\n", t.unique_bytes_recv);
+  printf("total data packets recieved: %d\n", t.total_data_packets_recv);
+  printf("unique data packets recieved: %d\n", t.total_unique_data_packets_recv);
+  printf("SYN packets recieved: %d\n", t.syn_recv);
+  printf("FIN packets recieved: %d\n", t.fin_recv);
+  printf("RST packets recieved: %d\n", t.rst_recv);
+  printf("ACK packets sent: %d\n", t.ack_sent);
+  printf("RST packets sent: %d\n", t.rst_sent);
+  printf("total time duration (second): %d\n", t.final_time);
 }
