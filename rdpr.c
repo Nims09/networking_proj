@@ -48,7 +48,7 @@
 
 #define PROTOCOL_TOKEN "UVicCSc361"
 
-#define PACKET_TIMEOUT 5
+#define PACKET_TIMEOUT 1
 
 struct packet {
   int type;
@@ -149,6 +149,14 @@ int main(int argc, char *argv[]) {
     fprintf(stderr, "REC: Error error on setsockopt()\n" );    
   }
 
+  // Set Timeout
+  // struct timeval tv;
+  // tv.tv_sec = 0;
+  // tv.tv_sec = PACKET_TIMEOUT;
+  // if ( setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0 ) {
+  //     perror("REC: Error setting timeout\n");
+  // }
+
   if ( bind(sockfd, (struct sockaddr *) &recv_addr, sizeof(recv_addr)) < 0) {
     close(sockfd);
     fprintf(stderr, "REC: Error on error on bind()\n" );
@@ -224,33 +232,38 @@ int main(int argc, char *argv[]) {
 
       // Finished transfering, closing handshake
       if ( p.type == FIN_TYPE ) {
-        buildRDPPacket(ACK_TYPE, current_seqnum, p.seqnum, 0, window_size, p.dest_ip, p.dest_port, p.src_ip, p.src_port, "", sockfd, sender_addr, sender_len, LOG_FLAG_S_PACKET_INITIAL, tracker);  
-
-        buildRDPPacket(FIN_TYPE, current_seqnum, p.seqnum, 0, window_size, p.dest_ip, p.dest_port, p.src_ip, p.src_port, "", sockfd, sender_addr, sender_len, LOG_FLAG_S_PACKET_INITIAL, tracker); 
-
-        if ((numbytes = recvfrom(sockfd, window, MAXBUFLEN-1 , 0,
-            (struct sockaddr *)&sender_addr, &sender_len)) == -1) {
-            perror("REC: error on recvfrom()!");
-            return -1;
-        }
-
-        p = parsePacket(window, LOG_FLAG_R_PACKET_INITIAL);
-        tracker = addRecvDataToTracker(p, LOG_FLAG_R_PACKET_INITIAL, tracker);
-
-
-        // TODO: This should check ack numbers to make sure its the correct value, same should go on the senders end too.
-        if ( p.type == ACK_TYPE ) {
-          break;
-        } else {
-          // Error here
-          continue;
-        }
+        break;
       }
     }
 
+    int in_recv_resent = LOG_FLAG_R_PACKET_INITIAL;
+
+    buildRDPPacket(ACK_TYPE, current_seqnum, p.seqnum, 0, window_size, p.dest_ip, p.dest_port, p.src_ip, p.src_port, "", sockfd, sender_addr, sender_len, LOG_FLAG_S_PACKET_INITIAL, tracker);  
+
+    buildRDPPacket(FIN_TYPE, current_seqnum, p.seqnum, 0, window_size, p.dest_ip, p.dest_port, p.src_ip, p.src_port, "", sockfd, sender_addr, sender_len, LOG_FLAG_S_PACKET_INITIAL, tracker); 
+
+    if ((numbytes = recvfrom(sockfd, window, MAXBUFLEN-1 , 0,
+        (struct sockaddr *)&sender_addr, &sender_len)) == -1) {
+        perror("REC: error on recvfrom()!");
+        return -1;
+    }
+
+    p = parsePacket(window, LOG_FLAG_R_PACKET_INITIAL);
+    tracker = addRecvDataToTracker(p, LOG_FLAG_R_PACKET_INITIAL, tracker);
+
+
+    // TODO: This should check ack numbers to make sure its the correct value, same should go on the senders end too.
+    if ( p.type == ACK_TYPE ) {
+      break;
+    } else {
+      // Error here
+      in_recv_resent++;
+      continue;
+    }      
+    
+
     fclose(write_file); 
     break;
-
   }
 
   time_t time_final = time(NULL);

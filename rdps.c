@@ -19,7 +19,7 @@
 
 #define WINDOWSIZE 4096
 #define MAXPACKETSIZE 1024
-#define DATAPACKETSIZE 100 // TODO: Make this larger. XX Could cause errors
+#define DATAPACKETSIZE 1000 // TODO: Make this larger. XX Could cause errors
 #define MAXBUFLEN 256
 
 #define DAT_TYPE 0
@@ -147,7 +147,7 @@ int main(int argc, char *argv[]) {
   recv_addr = setAddressAndPortNo(dest_address, dest_portno);
   sender_addr = setAddressAndPortNo(address, portno);
 
-  // set Timeout
+  // Set Timeout
   struct timeval tv;
   tv.tv_sec = 0;
   tv.tv_sec = PACKET_TIMEOUT;
@@ -210,7 +210,6 @@ int main(int argc, char *argv[]) {
 
   // TODO - these start as their initial value, for each packet needing to resend their are incremented
   int is_send_resend = LOG_FLAG_S_PACKET_INITIAL;
-  int is_recv_resend = LOG_FLAG_R_PACKET_INITIAL;
 
   // Create tracker and check initial time
   struct log_tracker tracker; 
@@ -218,132 +217,111 @@ int main(int argc, char *argv[]) {
 
   // Get the time
   time_t time_initial = time(NULL);
+  
+  // SYN Handshake completion
+  while( 1 ) {
+    // Initialize protocol
+    // TODO: some times infinite loops sending SYNs
+    tracker = buildRDPPacket(SYN_TYPE, current_seqnum, current_acknum, 0, 0, dest_address, dest_portno, address, portno, "", sockfd, recv_addr, recv_len, is_send_resend, tracker);
+    if ( is_send_resend > LOG_FLAG_S_PACKET_INITIAL ) {
+      is_send_resend--;
+    }
 
-  // Running loop
-  while ( 1 ) {
-    // SYN Handshake completion
-    while( 1 ) {
-      // Initialize protocol
-      // TODO: some times infinite loops sending SYNs
-      tracker = buildRDPPacket(SYN_TYPE, current_seqnum, current_acknum, 0, 0, dest_address, dest_portno, address, portno, "", sockfd, recv_addr, recv_len, is_send_resend, tracker);
+    if ((numbytes = recvfrom(sockfd, window, MAXBUFLEN-1 , 0,
+        (struct sockaddr *)&recv_addr, &recv_len)) == -1) {
+      is_send_resend++;
+      continue;
+    }
+
+    p = parsePacket(window, LOG_FLAG_R_PACKET_INITIAL);
+    tracker = addRecvDataToTracker(p, LOG_FLAG_R_PACKET_INITIAL, tracker);
+
+    if ( p.type == SYN_TYPE ) {
+      break;
+    } else {
+      continue;
+    }
+
+  }
+
+  // Begin sending data
+  int target_window = p.window;
+  int total_sent = 0;
+  char nextDataPacket[DATAPACKETSIZE];  
+
+  while ( total_sent < strlen(payload) ) {
+    int current_window_place = 0;
+
+    while ( current_window_place < target_window && total_sent < strlen(payload) ) {
+
+      // Send DATA Packet
+      sprintf(nextDataPacket, "%.1000s\0", &payload[ total_sent ]);
+
+      tracker = buildRDPPacket(DAT_TYPE, total_sent, current_acknum, sizeof(nextDataPacket), sizeof(window), p.dest_ip, p.dest_port, p.src_ip, p.src_port, nextDataPacket, sockfd, recv_addr, recv_len, is_send_resend, tracker);
+
+      // TODO this is not working correctly
+      // If resend count is above initial decrement
       if ( is_send_resend > LOG_FLAG_S_PACKET_INITIAL ) {
         is_send_resend--;
       }
 
+      current_window_place = current_window_place + MAXPACKETSIZE;
+      total_sent = total_sent + strlen(nextDataPacket);
+    }
+
+    // Wait for ACK then continue sending next window
+    while (current_acknum < (total_sent - DATAPACKETSIZE) ) {
       if ((numbytes = recvfrom(sockfd, window, MAXBUFLEN-1 , 0,
           (struct sockaddr *)&recv_addr, &recv_len)) == -1) {
-        is_send_resend++;
-        continue;
-      }
+        total_sent = current_acknum;
+        is_send_resend += ( ( total_sent-current_acknum ) / DATAPACKETSIZE );
+        return -1;
+      }      
 
       p = parsePacket(window, LOG_FLAG_R_PACKET_INITIAL);
       tracker = addRecvDataToTracker(p, LOG_FLAG_R_PACKET_INITIAL, tracker);
 
-      if ( p.type == SYN_TYPE ) {
-        break;
-      } else {
-        continue;
-      }
- 
-    }
-
-    // Begin sending data
-    int target_window = p.window;
-    int total_sent = 0;
-    char nextDataPacket[DATAPACKETSIZE];  
-
-    while ( total_sent < strlen(payload) ) {
-      int current_window_place = 0;
-
-      while ( current_window_place < target_window && total_sent < strlen(payload) ) {
-
-        // Send DATA Packet
-        sprintf(nextDataPacket, "%.100s\0", &payload[ total_sent ]);
-
-        tracker = buildRDPPacket(DAT_TYPE, total_sent, current_acknum, sizeof(nextDataPacket), sizeof(window), p.dest_ip, p.dest_port, p.src_ip, p.src_port, nextDataPacket, sockfd, recv_addr, recv_len, is_send_resend, tracker);
-
-        // TODO this is not working correctly
-        // If resend count is above initial decrement
-        if ( is_send_resend > LOG_FLAG_S_PACKET_INITIAL ) {
-          is_send_resend--;
-        }
-
-        current_window_place = current_window_place + MAXPACKETSIZE;
-        total_sent = total_sent + strlen(nextDataPacket);
-      }
-
-      // Wait for ACK then continue sending next window
-      while (current_acknum < (total_sent - DATAPACKETSIZE) ) {
-        if ((numbytes = recvfrom(sockfd, window, MAXBUFLEN-1 , 0,
-            (struct sockaddr *)&recv_addr, &recv_len)) == -1) {
-          total_sent = current_acknum;
+      if ( p.type == ACK_TYPE ) {
+        if ( p.acknum <= (current_acknum+DATAPACKETSIZE) ) {
+          current_acknum = p.acknum;
+        } else {
+          // We lost a packet, resend from that point
           is_send_resend += ( ( total_sent-current_acknum ) / DATAPACKETSIZE );
-          return -1;
-        }      
-
-        p = parsePacket(window, LOG_FLAG_R_PACKET_INITIAL);
-        tracker = addRecvDataToTracker(p, LOG_FLAG_R_PACKET_INITIAL, tracker);
-
-        if ( p.type == ACK_TYPE ) {
-          if ( p.acknum <= (current_acknum+DATAPACKETSIZE) ) {
-            current_acknum = p.acknum;
-          } else {
-            // We lost a packet, resend from that point
-            is_send_resend += ( ( total_sent-current_acknum ) / DATAPACKETSIZE );
-            total_sent = current_acknum;
-            break;
-          }
-          // TODO: We need a timeout here
+          total_sent = current_acknum;
+          break;
         }
+        // TODO: We need a timeout here
       }
     }
+  }
 
-    // Closing handshake
-    tracker = buildRDPPacket(FIN_TYPE, total_sent, current_acknum, 0, sizeof(window), p.dest_ip, p.dest_port, p.src_ip, p.src_port, "", sockfd, recv_addr, recv_len, LOG_FLAG_S_PACKET_INITIAL, tracker);
+  // Closing handshake
+  while ( 1 ) {
+    tracker = buildRDPPacket(FIN_TYPE, total_sent, current_acknum, 0, sizeof(window), p.dest_ip, p.dest_port, p.src_ip, p.src_port, "", sockfd, recv_addr, recv_len, is_send_resend, tracker);
 
     if ((numbytes = recvfrom(sockfd, window, MAXBUFLEN-1 , 0,
         (struct sockaddr *)&recv_addr, &recv_len)) == -1) {
-        perror("SEN: Error on recvfrom()!");
-        return -1;
+      is_send_resend++;
+    printf("tr2\n");
+
+      continue;
     }      
 
     p = parsePacket(window, LOG_FLAG_R_PACKET_INITIAL);
+    tracker = addRecvDataToTracker(p, is_send_resend, tracker);
 
-    if ( p.type != ACK_TYPE ) {
-      // Error here
-      continue;
-    }
-
-    if ((numbytes = recvfrom(sockfd, window, MAXBUFLEN-1 , 0,
-        (struct sockaddr *)&recv_addr, &recv_len)) == -1) {
-        perror("SEN: Error on recvfrom()!");
-        return -1;
-    }       
-
-    p = parsePacket(window, LOG_FLAG_R_PACKET_INITIAL); 
-    tracker = addRecvDataToTracker(p, LOG_FLAG_R_PACKET_INITIAL, tracker);
-
-    int last_packet = -1;
-    while (last_packet != FIN_TYPE) {
-      if ((numbytes = recvfrom(sockfd, window, MAXBUFLEN-1 , 0,
-          (struct sockaddr *)&recv_addr, &recv_len)) == -1) {
-          perror("SEN: Error on recvfrom()!");
-          return -1;
-      }       
-
-      p = parsePacket(window, LOG_FLAG_R_PACKET_RESEND);
-      tracker = addRecvDataToTracker(p, LOG_FLAG_R_PACKET_INITIAL, tracker);
-
-      last_packet = p.type;
-    }
-
-    if ( p.type == FIN_TYPE ) {
-      // Connection closed
-      tracker = buildRDPPacket(ACK_TYPE, total_sent, current_acknum, 0, sizeof(window), p.dest_ip, p.dest_port, p.src_ip, p.src_port, "", sockfd, recv_addr, recv_len, LOG_FLAG_S_PACKET_INITIAL, tracker);      
-      break;      
-    } else {
-      // Error here
-      continue;
+    if ( p.type == ACK_TYPE ) {
+      while ( p.type != FIN_TYPE ) {
+        if ((numbytes = recvfrom(sockfd, window, MAXBUFLEN-1 , 0,
+                (struct sockaddr *)&recv_addr, &recv_len)) == -1) {
+          is_send_resend++;
+          continue;
+        }
+        p = parsePacket(window, LOG_FLAG_R_PACKET_INITIAL);
+        tracker = addRecvDataToTracker(p, is_send_resend, tracker);
+      }
+      tracker = buildRDPPacket(ACK_TYPE, total_sent, current_acknum, 0, sizeof(window), p.dest_ip, p.dest_port, p.src_ip, p.src_port, "", sockfd, recv_addr, recv_len, LOG_FLAG_S_PACKET_INITIAL, tracker);       
+      break;
     }
   }
 
