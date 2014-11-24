@@ -19,7 +19,7 @@
 
 #define WINDOWSIZE 4096
 #define MAXPACKETSIZE 1024
-#define DATAPACKETSIZE 100 // TODO: Make this larger. XX Could cause errors
+#define DATAPACKETSIZE 50 
 #define MAXBUFLEN 256
 
 #define INIT_TYPE -1
@@ -118,7 +118,6 @@ int main(int argc, char *argv[]) {
   int numbytes;
   struct sockaddr_in recv_addr, sender_addr;
   socklen_t sender_len, recv_len;
-  // TODO: fix this max bufflen its grabbing extra chars
   char buffer[MAXBUFLEN]; 
   char window[WINDOWSIZE];
   int optval = 1;
@@ -184,80 +183,85 @@ int main(int argc, char *argv[]) {
   struct packet p;
   struct log_tracker tracker;
 
-  // Get the time
+  // Get the initial time
   time_t time_initial = time(NULL);
   
-  // Running loop
+  
+  // SYN Handshake
   while ( 1 ) {
-    
-    // SYN Handshake
-    while ( 1 ) {
-      if ((numbytes = recvfrom(sockfd, window, MAXBUFLEN-1 , 0,
-          (struct sockaddr *)&sender_addr, &sender_len)) == -1) {
-          perror("REC: error on recvfrom()!");
-          return -1;
-      }
+    if ((numbytes = recvfrom(sockfd, window, MAXBUFLEN-1 , 0,
+        (struct sockaddr *)&sender_addr, &sender_len)) == -1) {
+      // Continue waiting
+      continue;
+    }
 
-      p = parsePacket(window, LOG_FLAG_R_PACKET_INITIAL);
+    p = parsePacket(window, LOG_FLAG_R_PACKET_INITIAL);
+    tracker = addRecvDataToTracker(p, LOG_FLAG_R_PACKET_INITIAL, tracker);
 
-      if ( p.type == SYN_TYPE ) {
-
-        while ( 1 ) {
-          buildRDPPacket(SYN_TYPE, p.acknum, (p.seqnum+1), 0, window_size, address, portno, p.src_ip, p.src_port, "", sockfd, sender_addr, sender_len, LOG_FLAG_S_PACKET_INITIAL, tracker); 
-                
-          if ((numbytes = recvfrom(sockfd, window, MAXBUFLEN-1 , 0,
-                (struct sockaddr *)&sender_addr, &sender_len)) == -1) {
-                perror("REC: error on recvfrom()!");
-                return -1;
-            }
-
-          p = parsePacket(window, LOG_FLAG_R_PACKET_INITIAL);                   
-          if ( p.type == ACK_TYPE ) {
-            break;
-          } else {
+    if ( p.type == SYN_TYPE ) {
+      while ( 1 ) {
+        tracker = buildRDPPacket(SYN_TYPE, p.acknum, (p.seqnum+1), 0, window_size, address, portno, p.src_ip, p.src_port, "", sockfd, sender_addr, sender_len, LOG_FLAG_S_PACKET_INITIAL, tracker); 
+              
+        if ((numbytes = recvfrom(sockfd, window, MAXBUFLEN-1 , 0,
+              (struct sockaddr *)&sender_addr, &sender_len)) == -1) {
             continue;
-          }            
-        }
+          }
 
-        break;
-      } else {
-        continue;
-      }    
-    }
+        p = parsePacket(window, LOG_FLAG_R_PACKET_INITIAL);
+        tracker = addRecvDataToTracker(p, LOG_FLAG_R_PACKET_INITIAL, tracker);
 
-    // Begin accepting data
-    int current_seqnum = 0;
-    int total_recieved = 0;
-    while ( 1 ) {
-      if ((numbytes = recvfrom(sockfd, window, MAXBUFLEN-1 , 0,
-          (struct sockaddr *)&sender_addr, &sender_len)) == -1) {
-          perror("REC: error on recvfrom()!");
-          return -1;
+        if ( p.type == ACK_TYPE ) {
+          break;
+        } else {
+          continue;
+        }            
       }
 
-      p = parsePacket(window, LOG_FLAG_R_PACKET_INITIAL);
-      tracker = addRecvDataToTracker(p, LOG_FLAG_R_PACKET_INITIAL, tracker);
-      
-      if ( p.seqnum > total_recieved) {
-        // We're getting duplicate packets don't write.
-        fprintf(write_file, "%s", p.data);
-        total_recieved = p.seqnum;
-      } 
+      break;
+    } else {
+      continue;
+    }    
+  }
 
-      buildRDPPacket(ACK_TYPE, current_seqnum, p.seqnum, 0, window_size, p.dest_ip, p.dest_port, p.src_ip, p.src_port, "", sockfd, sender_addr, sender_len, LOG_FLAG_S_PACKET_INITIAL, tracker);
-      current_seqnum++;
+  // Begin accepting data
+  int current_seqnum = 0;
+  int total_recieved = 0;
 
-      // Finished transfering, closing handshake
-      if ( p.type == FIN_TYPE ) {
-        break;
-      }
+  int is_resend_sent = LOG_FLAG_R_PACKET_INITIAL;
+  while ( 1 ) {
+    if ((numbytes = recvfrom(sockfd, window, MAXBUFLEN-1 , 0,
+        (struct sockaddr *)&sender_addr, &sender_len)) == -1) {
+      continue;
     }
 
-    int in_recv_resent = LOG_FLAG_R_PACKET_INITIAL;
+    p = parsePacket(window, is_resend_sent);
+    tracker = addRecvDataToTracker(p, is_resend_sent, tracker);
+    
+    if ( p.seqnum > total_recieved) {
+      // We're not getting duplicate packets, write.
+      fprintf(write_file, "%s", p.data);
+      total_recieved = p.seqnum;
+      is_resend_sent--;
+    } else {
+      is_resend_sent++;
+    }
 
-    buildRDPPacket(ACK_TYPE, current_seqnum, p.seqnum, 0, window_size, p.dest_ip, p.dest_port, p.src_ip, p.src_port, "", sockfd, sender_addr, sender_len, LOG_FLAG_S_PACKET_INITIAL, tracker);  
+    tracker = buildRDPPacket(ACK_TYPE, current_seqnum, p.seqnum, 0, window_size, p.dest_ip, p.dest_port, p.src_ip, p.src_port, "", sockfd, sender_addr, sender_len, LOG_FLAG_S_PACKET_INITIAL, tracker);
+    current_seqnum++;
 
-    buildRDPPacket(FIN_TYPE, current_seqnum, p.seqnum, 0, window_size, p.dest_ip, p.dest_port, p.src_ip, p.src_port, "", sockfd, sender_addr, sender_len, LOG_FLAG_S_PACKET_INITIAL, tracker); 
+    // Finished transfering, Closing handshake
+    if ( p.type == FIN_TYPE ) {
+      break;
+    }
+  }
+
+  int in_recv_resent = LOG_FLAG_R_PACKET_INITIAL;
+
+  // Closing handshake
+  while ( 1 ) {
+    tracker = buildRDPPacket(ACK_TYPE, current_seqnum, p.seqnum, 0, window_size, p.dest_ip, p.dest_port, p.src_ip, p.src_port, "", sockfd, sender_addr, sender_len, LOG_FLAG_S_PACKET_INITIAL, tracker);  
+
+    tracker = buildRDPPacket(FIN_TYPE, current_seqnum, p.seqnum, 0, window_size, p.dest_ip, p.dest_port, p.src_ip, p.src_port, "", sockfd, sender_addr, sender_len, LOG_FLAG_S_PACKET_INITIAL, tracker); 
 
     if ((numbytes = recvfrom(sockfd, window, MAXBUFLEN-1 , 0,
         (struct sockaddr *)&sender_addr, &sender_len)) == -1) {
@@ -268,8 +272,6 @@ int main(int argc, char *argv[]) {
     p = parsePacket(window, LOG_FLAG_R_PACKET_INITIAL);
     tracker = addRecvDataToTracker(p, LOG_FLAG_R_PACKET_INITIAL, tracker);
 
-
-    // TODO: This should check ack numbers to make sure its the correct value, same should go on the senders end too.
     if ( p.type == ACK_TYPE ) {
       break;
     } else {
@@ -277,10 +279,9 @@ int main(int argc, char *argv[]) {
       in_recv_resent++;
       continue;
     }      
-
-    fclose(write_file); 
-    break;
   }
+
+  fclose(write_file); 
 
   time_t time_final = time(NULL);
 
@@ -288,7 +289,7 @@ int main(int argc, char *argv[]) {
 
   printTracker(tracker);
 
-  return -1;
+  return 1;
 }
 
 struct log_tracker buildRDPPacket(int flag, int seqnum, int acknum, int payloadlength, int winsize, char* destip, int destportno, char* srcip, int srcportno, char *payload, int sockfd, struct sockaddr_in addr, socklen_t len, int packet_initial_flag, struct log_tracker tracker) {
@@ -425,9 +426,6 @@ struct packet parsePacket(char* packet, int packet_initial_flag) {
 
   writeServerLog(packet_initial_flag, p.src_ip, p.src_port, p.dest_ip, p.dest_port, p.type, p.acknum, p.window);  
 
-  // TODO Remove me im a trace
-  // if (p.type == DAT_TYPE) printf("%d >> %s\n", p.seqnum, p.data);
-
   return p;
 }
 
@@ -483,22 +481,16 @@ void writeServerLog(int flag, char* src_ip, int src_port, char* dst_ip, int dst_
       break;
   }
 
-  switch ( flag ) {
-    case LOG_FLAG_S_PACKET_INITIAL:
-      flag_val = "s";
-      break;
-    case LOG_FLAG_S_PACKET_RESEND:
-      flag_val = "S";
-      break;
-    case LOG_FLAG_R_PACKET_INITIAL:
-      flag_val = "r";
-      break;
-    case LOG_FLAG_R_PACKET_RESEND:
-      flag_val = "R";
-      break;                  
-    default:
-      flag_val = " ";
-      break;
+  if ( flag == LOG_FLAG_S_PACKET_INITIAL ) {
+    flag_val = "s";
+  } else if ( flag > LOG_FLAG_S_PACKET_INITIAL && flag != LOG_FLAG_R_PACKET_INITIAL && packet_type != DAT_TYPE ) {
+    flag_val = "S";
+  } else if ( flag == LOG_FLAG_R_PACKET_INITIAL ) {
+    flag_val = "r";
+  } else if ( flag > LOG_FLAG_R_PACKET_INITIAL && packet_type == DAT_TYPE ) {
+    flag_val = "R";
+  } else {
+    flag_val = "r";
   }
 
   printf("%s %s %s:%d %s:%d %s %d %d\n", dateString, flag_val, src_ip, src_port, dst_ip, dst_port, packet_type_val, seq_or_ack, window_or_length);
@@ -508,7 +500,6 @@ int checkFilePath(char *loc) {
   return access(loc, F_OK);
 }
   
-// TODO: make this function more robust
 int strToInt(char *string) {
   return atoi(string);
 }
@@ -544,7 +535,6 @@ struct log_tracker addRecvDataToTracker(struct packet p, int packet_initial_flag
   return t;
 }
 
-// http://stackoverflow.com/questions/16275444/c-how-to-print-time-difference-in-accuracy-of-milliseconds-and-nanoseconds XXX
 void printTracker(struct log_tracker t) {
 
   printf("total data bytes recieved: %d\n", t.total_bytes_recv);

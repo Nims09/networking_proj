@@ -19,7 +19,7 @@
 
 #define WINDOWSIZE 4096
 #define MAXPACKETSIZE 1024
-#define DATAPACKETSIZE 50 // TODO: Make this larger. XX Could cause errors
+#define DATAPACKETSIZE 50 
 #define MAXBUFLEN 256
 
 #define DAT_TYPE 0
@@ -208,7 +208,6 @@ int main(int argc, char *argv[]) {
   int current_seqnum = 0;
   int current_acknum = 0;
 
-  // TODO - these start as their initial value, for each packet needing to resend their are incremented
   int is_send_resend = LOG_FLAG_S_PACKET_INITIAL;
 
   // Create tracker and check initial time
@@ -221,7 +220,6 @@ int main(int argc, char *argv[]) {
   // SYN Handshake completion
   while( 1 ) {
     // Initialize protocol
-    // TODO: some times infinite loops sending SYNs
     tracker = buildRDPPacket(SYN_TYPE, current_seqnum, current_acknum, 0, 0, dest_address, dest_portno, address, portno, "", sockfd, recv_addr, recv_len, is_send_resend, tracker);
     if ( is_send_resend > LOG_FLAG_S_PACKET_INITIAL ) {
       is_send_resend--;
@@ -262,8 +260,6 @@ int main(int argc, char *argv[]) {
 
       tracker = buildRDPPacket(DAT_TYPE, total_sent, current_acknum, sizeof(nextDataPacket), sizeof(window), p.dest_ip, p.dest_port, p.src_ip, p.src_port, nextDataPacket, sockfd, recv_addr, recv_len, is_send_resend, tracker);
 
-      // TODO this is not working correctly
-      // If resend count is above initial decrement
       if ( is_send_resend > LOG_FLAG_S_PACKET_INITIAL ) {
         is_send_resend--;
       }
@@ -274,12 +270,10 @@ int main(int argc, char *argv[]) {
 
     // Wait for ACK then continue sending next window
     while (current_acknum < (total_sent - DATAPACKETSIZE) ) {
-      // XXX Seems to be some issues accepting ACKs correctly.. the other side is for sure not getting all the data even though all the packets are arriving
       if ((numbytes = recvfrom(sockfd, window, MAXBUFLEN-1 , 0,
           (struct sockaddr *)&recv_addr, &recv_len)) == -1) {
         total_sent = current_acknum;
         is_send_resend += ( ( total_sent-current_acknum ) / DATAPACKETSIZE );
-        return -1;
       }      
 
       p = parsePacket(window, LOG_FLAG_R_PACKET_INITIAL);
@@ -294,21 +288,23 @@ int main(int argc, char *argv[]) {
           total_sent = current_acknum;
           break;
         }
-        // TODO: We need a timeout here
+      } else if ( p.type == SYN_TYPE ) {
+        // We had a dropped packet on SYN shake
+        is_send_resend += ( ( total_sent-current_acknum ) / DATAPACKETSIZE );
+        total_sent = current_acknum;
+        tracker = buildRDPPacket(ACK_TYPE, current_seqnum, current_acknum, 0, 0, dest_address, dest_portno, address, portno, "", sockfd, recv_addr, recv_len, is_send_resend, tracker);
+        break;
       }
     }
   }
 
   // Closing handshake
-  // TODO XXX FIX CLOSING HANDSHAKE
   while ( 1 ) {
     tracker = buildRDPPacket(FIN_TYPE, total_sent, current_acknum, 0, sizeof(window), p.dest_ip, p.dest_port, p.src_ip, p.src_port, "", sockfd, recv_addr, recv_len, is_send_resend, tracker);
 
     if ((numbytes = recvfrom(sockfd, window, MAXBUFLEN-1 , 0,
         (struct sockaddr *)&recv_addr, &recv_len)) == -1) {
       is_send_resend++;
-    printf("tr2\n");
-
       continue;
     }      
 
@@ -317,6 +313,9 @@ int main(int argc, char *argv[]) {
 
     if ( p.type == ACK_TYPE ) {
       while ( p.type != FIN_TYPE ) {
+        // Assume we have a timeout and resend FIN
+        tracker = buildRDPPacket(FIN_TYPE, total_sent, current_acknum, 0, sizeof(window), p.dest_ip, p.dest_port, p.src_ip, p.src_port, "", sockfd, recv_addr, recv_len, is_send_resend, tracker);
+
         if ((numbytes = recvfrom(sockfd, window, MAXBUFLEN-1 , 0,
                 (struct sockaddr *)&recv_addr, &recv_len)) == -1) {
           is_send_resend++;
@@ -325,10 +324,12 @@ int main(int argc, char *argv[]) {
         p = parsePacket(window, LOG_FLAG_R_PACKET_INITIAL);
         tracker = addRecvDataToTracker(p, is_send_resend, tracker);
       }
+
       tracker = buildRDPPacket(ACK_TYPE, total_sent, current_acknum, 0, sizeof(window), p.dest_ip, p.dest_port, p.src_ip, p.src_port, "", sockfd, recv_addr, recv_len, LOG_FLAG_S_PACKET_INITIAL, tracker);       
       break;
     }
   }
+  
 
   time_t time_final = time(NULL);
 
@@ -338,16 +339,13 @@ int main(int argc, char *argv[]) {
  
   free(payload);
 
-	return -1;
+	return 1;
 }
 
 struct log_tracker buildRDPPacket(int flag, int seqnum, int acknum, int payloadlength, int winsize, char* destip, int destportno, char* srcip, int srcportno, char *payload, int sockfd, struct sockaddr_in addr, socklen_t len, int packet_initial_flag, struct log_tracker tracker) {
   int type = -1; 
   static char packet[MAXPACKETSIZE];
   char* header = NULL;
-
-  // TODO remove me i'm a trace
-  // printf("%d >> %s\n", seqnum, payload);
 
   header = buildRDPHeader(flag, seqnum, acknum, payloadlength, winsize, destip, destportno, srcip, srcportno);    
 
@@ -542,7 +540,6 @@ void writeServerLog(int flag, char* src_ip, int src_port, char* dst_ip, int dst_
       break;
   }
 
-  // TODO check if we are getting blank values a miscount is happening
   if ( flag == LOG_FLAG_S_PACKET_INITIAL ) {
     flag_val = "s";
   } else if ( flag > LOG_FLAG_S_PACKET_INITIAL && flag != LOG_FLAG_R_PACKET_INITIAL) {
@@ -562,7 +559,6 @@ int checkFilePath(char *loc) {
     return access(loc, F_OK);
 }
 
-// TODO: make this function more robust
 int strToInt(char *string) {
   return atoi(string);
 }
@@ -600,122 +596,3 @@ void printTracker(struct log_tracker t) {
   printf("RST packets received: %d\n", t.rst_recv);
   printf("total time duration (second): %d\n", t.final_time);
 }
-
- /*
-  The buffer is the buffer you're working with, you can clear space in it as you write things to the file.
- */
-
- /*
-  Reciever initiates a file, thats where all its stored data is saved
-  Sender specifies a file to send to the reciever
-  */
-
-  /*
-  Sender intitiates by having the recievers IP the packets from then on containt where the IP:PoRTNO of the next packet will come from 
-  */
-
-  /*
-  Packets items and flags are seperated by a space 
-  */
-
-  /*
-  int size = strlen(payload);
-  int firstCount = 0;
-
-  while (firstCount < (size-9)) {
-    char str[10];
-    strncpy ( str, payload+firstCount, 9);
-    str[9] = '\0';
-    sendString(sockfd, str, recv_addr, recv_len);
-    firstCount = firstCount + 9;
-  }
-  printf("sz %d\n", size);
-  printf("cnt %d\n", firstCount);
-  */
-
-  /*
-  For assign: Reciever has some buffer (window) as the buffer gets filled, window size changes, on the reciever end, it can read its buffer into the file and create more space in its window.
-
-  - The packet on SYN will send a packet to the receiver with its IP/Port/ Dst/port this goes to the NAT which will make some changes according to translation.
-  - The router keeps a table of src_ip, src_port, dst_ip, dst_port, when it gets the first packet it makes an entry
-  - Then does a network address translation on the entry
-
-  NAT and router destinations:
-  - dst_ip/port and src_ip/port are fields in the header
-  - we pretend the NAT is translating these addresses and take them as they are recieved by either client
-  */
-
-  /* SOME CODE OR w/either
-
-  if ( strcmp("DAT", previous_flag) == 0 ) {
-
-  } else if ( strcmp("ACK", previous_flag) == 0 ) {
-
-  } else if ( strcmp("SYN", previous_flag) == 0 ) {
-    
-  } else if ( strcmp("FIN", previous_flag) == 0 ) {
-    
-  } else if ( strcmp("RST", previous_flag) == 0 ) {
-    
-  } else if ( strcmp("init", previous_flag) == 0 ) {
-    packet = buildRDPHeader(SYN_TYPE, 0, 0, 0, 0, destip, destportno, srcip, srcportno);
-  } else {
-
-  }
-  */
-
-  /*
-  void buildRDPPacket(int previous_flag, int seqnum, int acknum, int payloadlength, int winsize, char* destip, int destportno, char*srcip, int srcportno, char *payload, int sockfd, struct sockaddr_in addr, socklen_t len) {
-    int type = -1; 
-    char* packet = NULL;
-
-    switch ( previous_flag ) {
-      case DAT_TYPE:
-        break;
-      case ACK_TYPE:
-        break;
-      case SYN_TYPE:
-        break;
-      case FIN_TYPE:
-        break;
-      case RST_TYPE:
-        break;
-      case INIT_TYPE:
-        packet = buildRDPHeader(SYN_TYPE, 0, 0, 0, 0, destip, destportno, srcip, srcportno);    
-        break;
-      default:
-        break;
-    }
-
-    sendPacket(sockfd, packet, addr, len);
-  }
-  */
-
-  /*
-  NOTE: Check what the headers end up being about size wise and just only send packets of actual data supplmeneting this size
-  */
-
-  // TODO: change this to use setsockopt with SO_REUSEADDR
-  // refrence: http://www.beej.us/guide/bgnet/output/html/multipage/setsockoptman.html
-  // ------->  
-
-  /*
-  // TO READ A FILLE PART BY PART
-  int counterz = 0;
-  while ( counterz < strlen(payload) ) {
-    printf("current >> %d\n", counterz);
-    printf( "%.100s", &payload[ counterz ] );
-    printf("\n");
-    counterz = counterz + 100;
-  }
-  }
-  */
-
-  /*
-  If you're having problems with sizes its likley because oif using strlen and size of interchangably which will yeild different results
-  */
-
-  // if ( p.type != ACK_TYPE ) {
-  //   perror("SEN: Failed to recieve correct ACK!");
-  //   break;
-  // }
