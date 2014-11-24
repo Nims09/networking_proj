@@ -149,13 +149,13 @@ int main(int argc, char *argv[]) {
     fprintf(stderr, "REC: Error error on setsockopt()\n" );    
   }
 
-  // Set Timeout
-  // struct timeval tv;
-  // tv.tv_sec = 0;
-  // tv.tv_sec = PACKET_TIMEOUT;
-  // if ( setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0 ) {
-  //     perror("REC: Error setting timeout\n");
-  // }
+  //Set Timeout
+  struct timeval tv;
+  tv.tv_sec = 0;
+  tv.tv_sec = PACKET_TIMEOUT;
+  if ( setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0 ) {
+      perror("REC: Error setting timeout\n");
+  }
 
   if ( bind(sockfd, (struct sockaddr *) &recv_addr, sizeof(recv_addr)) < 0) {
     close(sockfd);
@@ -201,7 +201,24 @@ int main(int argc, char *argv[]) {
       p = parsePacket(window, LOG_FLAG_R_PACKET_INITIAL);
 
       if ( p.type == SYN_TYPE ) {
-        buildRDPPacket(SYN_TYPE, p.acknum, (p.seqnum+1), 0, window_size, address, portno, p.src_ip, p.src_port, "", sockfd, sender_addr, sender_len, LOG_FLAG_S_PACKET_INITIAL, tracker);
+
+        while ( 1 ) {
+          buildRDPPacket(SYN_TYPE, p.acknum, (p.seqnum+1), 0, window_size, address, portno, p.src_ip, p.src_port, "", sockfd, sender_addr, sender_len, LOG_FLAG_S_PACKET_INITIAL, tracker); 
+                
+          if ((numbytes = recvfrom(sockfd, window, MAXBUFLEN-1 , 0,
+                (struct sockaddr *)&sender_addr, &sender_len)) == -1) {
+                perror("REC: error on recvfrom()!");
+                return -1;
+            }
+
+          p = parsePacket(window, LOG_FLAG_R_PACKET_INITIAL);                   
+          if ( p.type == ACK_TYPE ) {
+            break;
+          } else {
+            continue;
+          }            
+        }
+
         break;
       } else {
         continue;
@@ -225,7 +242,7 @@ int main(int argc, char *argv[]) {
         // We're getting duplicate packets don't write.
         fprintf(write_file, "%s", p.data);
         total_recieved = p.seqnum;
-      }
+      } 
 
       buildRDPPacket(ACK_TYPE, current_seqnum, p.seqnum, 0, window_size, p.dest_ip, p.dest_port, p.src_ip, p.src_port, "", sockfd, sender_addr, sender_len, LOG_FLAG_S_PACKET_INITIAL, tracker);
       current_seqnum++;
@@ -244,8 +261,8 @@ int main(int argc, char *argv[]) {
 
     if ((numbytes = recvfrom(sockfd, window, MAXBUFLEN-1 , 0,
         (struct sockaddr *)&sender_addr, &sender_len)) == -1) {
-        perror("REC: error on recvfrom()!");
-        return -1;
+      // Timeout and close connection
+      break; 
     }
 
     p = parsePacket(window, LOG_FLAG_R_PACKET_INITIAL);
@@ -260,7 +277,6 @@ int main(int argc, char *argv[]) {
       in_recv_resent++;
       continue;
     }      
-    
 
     fclose(write_file); 
     break;
@@ -408,6 +424,9 @@ struct packet parsePacket(char* packet, int packet_initial_flag) {
   }
 
   writeServerLog(packet_initial_flag, p.src_ip, p.src_port, p.dest_ip, p.dest_port, p.type, p.acknum, p.window);  
+
+  // TODO Remove me im a trace
+  // if (p.type == DAT_TYPE) printf("%d >> %s\n", p.seqnum, p.data);
 
   return p;
 }

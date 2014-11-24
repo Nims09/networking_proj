@@ -19,7 +19,7 @@
 
 #define WINDOWSIZE 4096
 #define MAXPACKETSIZE 1024
-#define DATAPACKETSIZE 1000 // TODO: Make this larger. XX Could cause errors
+#define DATAPACKETSIZE 50 // TODO: Make this larger. XX Could cause errors
 #define MAXBUFLEN 256
 
 #define DAT_TYPE 0
@@ -237,6 +237,9 @@ int main(int argc, char *argv[]) {
     tracker = addRecvDataToTracker(p, LOG_FLAG_R_PACKET_INITIAL, tracker);
 
     if ( p.type == SYN_TYPE ) {
+
+      tracker = buildRDPPacket(ACK_TYPE, current_seqnum, current_acknum, 0, 0, dest_address, dest_portno, address, portno, "", sockfd, recv_addr, recv_len, is_send_resend, tracker);
+
       break;
     } else {
       continue;
@@ -255,7 +258,7 @@ int main(int argc, char *argv[]) {
     while ( current_window_place < target_window && total_sent < strlen(payload) ) {
 
       // Send DATA Packet
-      sprintf(nextDataPacket, "%.1000s\0", &payload[ total_sent ]);
+      sprintf(nextDataPacket, "%.50s\0", &payload[ total_sent ]);
 
       tracker = buildRDPPacket(DAT_TYPE, total_sent, current_acknum, sizeof(nextDataPacket), sizeof(window), p.dest_ip, p.dest_port, p.src_ip, p.src_port, nextDataPacket, sockfd, recv_addr, recv_len, is_send_resend, tracker);
 
@@ -271,6 +274,7 @@ int main(int argc, char *argv[]) {
 
     // Wait for ACK then continue sending next window
     while (current_acknum < (total_sent - DATAPACKETSIZE) ) {
+      // XXX Seems to be some issues accepting ACKs correctly.. the other side is for sure not getting all the data even though all the packets are arriving
       if ((numbytes = recvfrom(sockfd, window, MAXBUFLEN-1 , 0,
           (struct sockaddr *)&recv_addr, &recv_len)) == -1) {
         total_sent = current_acknum;
@@ -296,6 +300,7 @@ int main(int argc, char *argv[]) {
   }
 
   // Closing handshake
+  // TODO XXX FIX CLOSING HANDSHAKE
   while ( 1 ) {
     tracker = buildRDPPacket(FIN_TYPE, total_sent, current_acknum, 0, sizeof(window), p.dest_ip, p.dest_port, p.src_ip, p.src_port, "", sockfd, recv_addr, recv_len, is_send_resend, tracker);
 
@@ -340,6 +345,9 @@ struct log_tracker buildRDPPacket(int flag, int seqnum, int acknum, int payloadl
   int type = -1; 
   static char packet[MAXPACKETSIZE];
   char* header = NULL;
+
+  // TODO remove me i'm a trace
+  // printf("%d >> %s\n", seqnum, payload);
 
   header = buildRDPHeader(flag, seqnum, acknum, payloadlength, winsize, destip, destportno, srcip, srcportno);    
 
